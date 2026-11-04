@@ -146,7 +146,7 @@ def main():
             state["model"] = [prog("1", "Licht 10", description="Abends"), prog("2", "Licht 2"), prog("3", "Nur Admin", isOperable=False), prog("4", "Kopie", isCopy=True), prog("5", "System", isInternal=True), prog("6", "Nie", lastExecuteTime="1970-01-01 01:00:00")]
             pg.reload(); pg.get_by_text("Licht 2", exact=True).wait_for()
             names = [t.split("\t")[0].strip() for t in pg.locator("tbody tr").all_inner_texts()]
-            check("not operable, copies and internal programs are left out; names sort naturally", names == ["Licht 2", "Licht 10", "Nie"], str(names))
+            check("copies and internal programs are left out, names sort naturally; an administrator also sees what users may not operate", names == ["Licht 2", "Licht 10", "Nie", "Nur Admin"], str(names))
             check("a program that never ran shows a dash", "—" in row("Nie").inner_text())
             for status, body, words, label in ((403, {"error": {"code": 400, "message": "access denied"}}, "not allowed", "no right (403)"),
                                               (404, {"error": {"code": 501, "message": "program not found"}}, "does not exist", "a program that is gone (404)"),

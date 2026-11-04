@@ -217,6 +217,13 @@ it is activated and the program can run at once (seen on the restored real CCU: 
 programs that depend on it, while deactivating ran nothing), so a click on a switch must not be able to switch lamps by
 accident. Deactivating needs no question. Cancel has the focus.
 
+**Managing programs (administrators).** Administrators see all programs but the editor's copies and the system's own (also those
+users may not operate) and get **New program**, and **Edit**, **Copy** and **Delete** per row (`POST|PUT|DELETE /api/v2/programs`).
+*New* makes an empty program that is switched off; *Edit* changes name, description, "visible" and "users may operate it" (only
+the changed fields are sent); *Copy* asks for a new name and makes an inactive copy; *Delete* asks first (Cancel has the focus). A
+name must be 1 to 100 characters and not used by any other ReGa object (HTTP 409, told in the dialog). **Not built:** the
+conditions and actions of a program; they stay in the classic *Programs and connections* editor (a program made here has none).
+
 ## System variables: status and control
 
 The first page that **writes**. The list is the classic one: name, description, last modified and status, with a name

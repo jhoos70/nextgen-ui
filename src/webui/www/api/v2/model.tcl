@@ -324,6 +324,7 @@ proc model_readPrograms { } {
         WriteLine("INFO {" # program.PrgInfo() # "}");
         WriteLine("OPERABLE {" # (program.UserAccessRights(iulOtherThanAdmin) == iarFullAccess) # "}");
         WriteLine("COPY {" # (program.ProgramCopyID() != ID_ERROR) # "}");
+        WriteLine("VISIBLE {" # program.Visible() # "}");
         WriteLine("}");
       }
     }
@@ -332,7 +333,8 @@ proc model_readPrograms { } {
   foreach rec [v2_records [hmscript $script]] {
     if { [catch { array set p $rec }] || ![info exists p(ID)] } then { array unset p; continue }
     foreach k {INFO OPERABLE COPY} { if { ![info exists p($k)] } then { set p($k) "" } }
-    lappend items "\{\"id\":[json_toString $p(ID)],\"name\":[json_toString $p(NAME)],\"isActive\":[model_bool $p(ACTIVE)],\"isInternal\":[model_bool $p(INTERNAL)],\"lastExecuteTime\":[json_toString $p(TIME)],\"description\":[json_toString $p(INFO)],\"isOperable\":[model_bool $p(OPERABLE)],\"isCopy\":[model_bool $p(COPY)]\}"
+    if { ![info exists p(VISIBLE)] } then { set p(VISIBLE) true }
+    lappend items "\{\"id\":[json_toString $p(ID)],\"name\":[json_toString $p(NAME)],\"isActive\":[model_bool $p(ACTIVE)],\"isInternal\":[model_bool $p(INTERNAL)],\"lastExecuteTime\":[json_toString $p(TIME)],\"description\":[json_toString $p(INFO)],\"isOperable\":[model_bool $p(OPERABLE)],\"isCopy\":[model_bool $p(COPY)],\"isVisible\":[model_bool $p(VISIBLE)]\}"
     array unset p
   }
   return $items

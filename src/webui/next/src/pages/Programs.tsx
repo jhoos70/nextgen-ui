@@ -1,11 +1,12 @@
 import * as React from "react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { ProgramDialog, type ProgramDialogMode } from "@/components/ProgramDialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { describeChangeError, describeError, executeProgram, getModel, isSessionExpired, setProgramActive, type Program } from "@/lib/api";
+import { deleteProgram, describeChangeError, describeError, executeProgram, getModel, isSessionExpired, setProgramActive, type Program } from "@/lib/api";
 import { text } from "@/lib/format";
 import { useI18n } from "@/lib/i18n";
 import { useCurrentProfile } from "@/lib/profile-context";
@@ -75,8 +76,9 @@ export default function Programs({ sid, onExpired }: { sid: string; onExpired: (
     (data ?? []).map((p): Program => ({ ...p, ...(lastRuns[p.id] ? { lastExecuteTime: lastRuns[p.id] } : {}), ...(p.id in actives ? { isActive: actives[p.id] } : {}) })),
     query,
     lang,
+    maySwitch,
   );
-  const any = filterPrograms(data ?? [], "", lang).length > 0;
+  const any = filterPrograms(data ?? [], "", lang, maySwitch).length > 0;
 
   async function run(p: Program) {
     const name = text(p.name, strings);
@@ -121,6 +123,36 @@ export default function Programs({ sid, onExpired }: { sid: string; onExpired: (
   // activating asks first: the CCU checks the conditions of a program when it is activated, and it can run at once
   const [activating, setActivating] = React.useState<Program | null>(null);
   const switchOpener = React.useRef<HTMLElement | null>(null);
+  // managing (administrators): the dialog to create, edit or copy, and the program being deleted
+  const [dialog, setDialog] = React.useState<ProgramDialogMode | null>(null);
+  const [deleting, setDeleting] = React.useState<Program | null>(null);
+  const dialogOpener = React.useRef<HTMLElement | null>(null);
+  const restoreFocus = () => {
+    const back = dialogOpener.current;
+    window.setTimeout(() => back?.isConnected && back.focus(), 0);
+  };
+  const openDialog = (mode: ProgramDialogMode, opener: HTMLElement) => {
+    dialogOpener.current = opener;
+    setDialog(mode);
+  };
+
+  async function remove(p: Program): Promise<string | null> {
+    const name = text(p.name, strings);
+    try {
+      await deleteProgram(sid, p.id);
+      setMessage({ text: t("programDeleted", { name }), failed: false });
+      refresh();
+      return null;
+    } catch (e) {
+      if (isSessionExpired(e)) {
+        onExpired();
+        return null;
+      }
+      const reason = describeChangeError(e, t);
+      setMessage({ text: t("programChangeFailed", { name, reason }), failed: true });
+      return reason;
+    }
+  }
 
   return (
     <Card className="space-y-4">
@@ -133,6 +165,13 @@ export default function Programs({ sid, onExpired }: { sid: string; onExpired: (
         <Input id="program-filter" type="search" value={query} placeholder={t("filterByName")} onChange={(e) => setQuery(e.target.value)} />
       </div>
       {/* The result of a run: announced to a screen reader, shown to everybody */}
+      {maySwitch && (
+        <div>
+          <Button variant="outline" onClick={(e) => openDialog({ kind: "create" }, e.currentTarget)}>
+            {t("newProgram")}
+          </Button>
+        </div>
+      )}
       <div role="status" aria-live="polite">
         {message && <p className={message.failed ? "text-sm text-[var(--destructive)]" : "text-sm"}>{message.text}</p>}
       </div>
@@ -156,6 +195,7 @@ export default function Programs({ sid, onExpired }: { sid: string; onExpired: (
               <TableHeader className="hidden sm:table-cell">{t("lastRun")}</TableHeader>
               <TableHeader>{t("programActive")}</TableHeader>
               {mayRun && <TableHeader className="text-right">{t("action")}</TableHeader>}
+              {maySwitch && <TableHeader className="text-right">{t("actions")}</TableHeader>}
             </TableRow>
           </TableHead>
           <tbody>
@@ -188,10 +228,63 @@ export default function Programs({ sid, onExpired }: { sid: string; onExpired: (
                     </Button>
                   </TableCell>
                 )}
+                {maySwitch && (
+                  <TableCell className="whitespace-nowrap text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button variant="outline" className="h-8 px-3" disabled={running !== null} onClick={(e) => openDialog({ kind: "edit", program: p }, e.currentTarget)} aria-label={`${t("editProgram")}: ${text(p.name, strings)}`}>
+                        {t("editProgram")}
+                      </Button>
+                      <Button variant="outline" className="h-8 px-3" disabled={running !== null} onClick={(e) => openDialog({ kind: "copy", program: p, name: t("programCopyName", { name: p.name }).slice(0, 100) }, e.currentTarget)} aria-label={`${t("copyProgram")}: ${text(p.name, strings)}`}>
+                        {t("copyProgram")}
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        className="h-8 px-3"
+                        disabled={running !== null}
+                        onClick={(e) => {
+                          dialogOpener.current = e.currentTarget;
+                          setDeleting(p);
+                        }}
+                        aria-label={`${t("delete")}: ${text(p.name, strings)}`}
+                      >
+                        {t("delete")}
+                      </Button>
+                    </div>
+                  </TableCell>
+                )}
               </TableRow>
             ))}
           </tbody>
         </Table>
+      )}
+      {dialog && (
+        <ProgramDialog
+          mode={dialog}
+          sid={sid}
+          onExpired={onExpired}
+          onClose={() => {
+            setDialog(null);
+            restoreFocus();
+          }}
+          onDone={(kind, saved) => {
+            setMessage({ text: t(kind === "create" ? "programCreated" : kind === "copy" ? "programCopied" : "programSaved", { name: saved.name }), failed: false });
+            setDialog(null);
+            restoreFocus();
+            refresh();
+          }}
+        />
+      )}
+      {deleting && (
+        <ConfirmDialog
+          title={t("programDeleteTitle")}
+          message={`${text(deleting.name, strings)}: ${t("programDeleteWarning")}`}
+          confirmLabel={t("delete")}
+          onConfirm={() => remove(deleting)}
+          onClose={() => {
+            setDeleting(null);
+            restoreFocus();
+          }}
+        />
       )}
       {activating && (
         <ConfirmDialog

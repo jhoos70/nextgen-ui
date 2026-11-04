@@ -165,6 +165,7 @@ export interface Program {
   isInternal: boolean;
   isOperable: boolean; // users may operate it (the classic status list shows only these)
   isCopy: boolean; // an editing artefact the classic list leaves out
+  isVisible: boolean; // the classic "visible" flag of the program editor
 }
 
 export interface Model {
@@ -406,6 +407,75 @@ export function makeSetProgramActive(doFetch: Fetch = defaultFetch): (sid: strin
 }
 const setProgramActiveDefault = makeSetProgramActive();
 export const setProgramActive = (sid: string, id: string, active: boolean) => setProgramActiveDefault(sid, id, active);
+
+/** What the management routes answer: the program as ReGa holds it after the change. */
+export interface ManagedProgram {
+  id: string;
+  name: string;
+  description: string;
+  isActive: boolean;
+  isVisible: boolean;
+  isOperable: boolean;
+}
+
+function toManagedProgram(doc: unknown, status: number): ManagedProgram {
+  const d = doc as Partial<ManagedProgram> | null;
+  if (!d || typeof d.id !== "string" || typeof d.name !== "string" || typeof d.isVisible !== "boolean" || typeof d.isOperable !== "boolean") throw new ApiError(0, "unexpected answer", status);
+  return { id: d.id, name: d.name, description: String(d.description ?? ""), isActive: d.isActive === true, isVisible: d.isVisible, isOperable: d.isOperable };
+}
+
+/** POST /programs {create}: an empty program, switched off (administrators only). */
+export function makeCreateProgram(doFetch: Fetch = defaultFetch): (sid: string, name: string, description?: string) => Promise<ManagedProgram> {
+  return async function createProgram(sid: string, name: string, description = ""): Promise<ManagedProgram> {
+    const { doc, status } = await send(doFetch, "/programs", { method: "POST", headers: headersFor(sid, true), body: JSON.stringify({ create: true, name, ...(description ? { description } : {}) }) });
+    throwIfError(doc, status);
+    return toManagedProgram(doc, status);
+  };
+}
+const createProgramDefault = makeCreateProgram();
+export const createProgram = (sid: string, name: string, description = ""): Promise<ManagedProgram> => createProgramDefault(sid, name, description);
+
+/** POST /programs {id, copy, name}: a copy under a new name, switched off. */
+export function makeCopyProgram(doFetch: Fetch = defaultFetch): (sid: string, id: string, name: string) => Promise<ManagedProgram> {
+  return async function copyProgram(sid: string, id: string, name: string): Promise<ManagedProgram> {
+    const { doc, status } = await send(doFetch, "/programs", { method: "POST", headers: headersFor(sid, true), body: JSON.stringify({ id, copy: true, name }) });
+    throwIfError(doc, status);
+    return toManagedProgram(doc, status);
+  };
+}
+const copyProgramDefault = makeCopyProgram();
+export const copyProgram = (sid: string, id: string, name: string): Promise<ManagedProgram> => copyProgramDefault(sid, id, name);
+
+export interface ProgramChanges {
+  name?: string;
+  description?: string;
+  isVisible?: boolean;
+  isOperable?: boolean;
+}
+
+/** PUT /programs {id, ...fields}: changes the given fields only. */
+export function makeUpdateProgram(doFetch: Fetch = defaultFetch): (sid: string, id: string, changes: ProgramChanges) => Promise<ManagedProgram> {
+  return async function updateProgram(sid: string, id: string, changes: ProgramChanges): Promise<ManagedProgram> {
+    const { doc, status } = await send(doFetch, "/programs", { method: "PUT", headers: headersFor(sid, true), body: JSON.stringify({ id, ...changes }) });
+    throwIfError(doc, status);
+    return toManagedProgram(doc, status);
+  };
+}
+const updateProgramDefault = makeUpdateProgram();
+export const updateProgram = (sid: string, id: string, changes: ProgramChanges): Promise<ManagedProgram> => updateProgramDefault(sid, id, changes);
+
+/** DELETE /programs?id=: deletes a program (administrators only). */
+export function makeDeleteProgram(doFetch: Fetch = defaultFetch): (sid: string, id: string) => Promise<{ id: string; deleted: boolean }> {
+  return async function deleteProgram(sid: string, id: string): Promise<{ id: string; deleted: boolean }> {
+    const { doc, status } = await send(doFetch, `/programs?id=${encodeURIComponent(id)}`, { method: "DELETE", headers: headersFor(sid) });
+    throwIfError(doc, status);
+    const d = doc as { id?: string; deleted?: boolean } | null;
+    if (!d || typeof d.deleted !== "boolean") throw new ApiError(0, "unexpected answer", status);
+    return { id: String(d.id ?? id), deleted: d.deleted };
+  };
+}
+const deleteProgramDefault = makeDeleteProgram();
+export const deleteProgram = (sid: string, id: string): Promise<{ id: string; deleted: boolean }> => deleteProgramDefault(sid, id);
 
 export interface ProgramRun {
   id: string;
@@ -923,6 +993,7 @@ export function describeChangeError(e: unknown, t: Translate): string {
   if (e instanceof ApiError && e.status === 422) return t("errInvalidValue");
   if (e instanceof ApiError && e.status === 403) return t("errNotAllowed");
   if (e instanceof ApiError && e.status === 404) return t("errGone");
+  if (e instanceof ApiError && e.status === 409) return t("errNameInUse");
   if (e instanceof ApiError && e.status === 502) return t("errNotSent");
   return describeError(e, t);
 }

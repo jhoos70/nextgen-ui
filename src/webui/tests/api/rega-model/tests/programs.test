@@ -39,12 +39,13 @@ proc run {found body args} {
   return [post $body -sessions $o(-sessions) -rega [list [list $::READ $found] [list $::RUN $o(-out)]]]
 }
 proc body {r} { return [string trim [dict get $r body]] }
+proc progcalls {r} { set n 0; foreach c [dict get $r rega_calls] { if {[string match {*ID_PROGRAMS*} $c] || [string match {*CreateObject*} $c] || [string match {*progName*} $c]} { incr n } }; return $n }
 proc scripts {r} { return [join [dict get $r rega_calls] \n] }
 
 test programs-0 {the handler file exists, is complete Tcl and the route is registered} -body {
   set fd [open [file join $gen rega-model v2 programs.tcl] r]; set c [read $fd]; close $fd
   set fd [open [file join $gen dispatcher v2 router.tcl] r]; set r [read $fd]; close $fd
-  list [info complete $c] [regexp {/programs\s+\{POST\s+programs.tcl\s+v2_programs_handle\}} $r]
+  list [info complete $c] [regexp {/programs\s+\{\{POST PUT DELETE\}\s+programs.tcl\s+v2_programs_handle\}} $r]
 } -result {1 1}
 
 test programs-1 {a program is run and the time of its last run comes back from ReGa} -body {
@@ -85,34 +86,34 @@ test programs-6 {a user needs the full access right, an administrator does not; 
   list [err $a] [status $b] [status $c] [err $d] [regexp {ID_PROGRAMS} [scripts $d]]
 } -result {{403 400 {access denied (program)}} 200 200 {403 400 {access denied (\"USER\" needed, session level 1)}} 0}
 
-test programs-7 {only POST is allowed (405 with Allow: POST); without a session HTTP 401 and no ReGa script runs} -body {
+test programs-7 {only POST, PUT and DELETE are allowed (GET is 405 with that Allow list); without a session HTTP 401 and no ReGa script runs} -body {
   set out {}
-  foreach m {GET PUT DELETE} {
+  foreach m {GET} {
     set r [post {} -method $m]
-    regexp {Allow: (\w+)} [dict get $r headers] -> allow
+    regexp {Allow: ([^\r\n]+)} [dict get $r headers] -> allow
     lappend out [status $r]/$allow
   }
   set n [golden::call_raw {{"id":"7","execute":true}} [golden::prepare [list -candidate $::CAND -method POST -contenttype application/json -setenv {REQUEST_URI /api/v2/programs} -header {X-Requested-With XMLHttpRequest} -sessions $::ADMIN]]]
   lappend out [status $n] [llength [dict get $n rega_calls]]
-} -result {405/POST 405/POST 405/POST 401 0}
+} -result {{405/POST, PUT, DELETE} 401 0}
 
-test programs-8 {all three scripts (read, run, switch) look the id up in the program collection and the id is a script variable, never code} -body {
+test programs-8 {the scripts (read, run, switch, describe, change, copy, delete) look the id up in the program collection and the id is a script variable, never code} -body {
   set fd [open [file join $gen rega-model v2 programs.tcl] r]; set c [read $fd]; close $fd
   list [regexp -all {foreach\(i, dom.GetObject\(ID_PROGRAMS\).EnumIDs\(\)\)} $c] [regexp {dom.GetObject\(\$} $c] [regexp -all {ProgramExecute\(\)} $c]
-} -result {3 0 1}
+} -result {7 0 1}
 
 proc modelprograms {extra} {
   set rec [concat {ID 1053 NAME Evening TIME {2026-10-12 21:00:00} ACTIVE true INTERNAL false} $extra]
   return [golden::call_raw {} [golden::prepare [list -candidate $::CAND -method GET -contenttype {} -setenv {REQUEST_URI /api/v2/model} -query sections=programs \
-    -header {X-Requested-With XMLHttpRequest} -header {X-Session-Id AbCdEf1234} -sessions $::GUEST -rega [list [list {*ID_PROGRAMS*PrgInfo*} [list $rec]]]]]]
+    -header {X-Requested-With XMLHttpRequest} -header {X-Session-Id AbCdEf1234} -sessions $::USER -rega [list [list {*ID_PROGRAMS*PrgInfo*} [list $rec]]]]]]
 }
 
 test programs-9 {the model's programs carry the description, whether users may operate them and whether they are copies (defaults: empty, false, false)} -body {
   set a [body [modelprograms {INFO {Licht am Abend} OPERABLE true COPY false}]]
-  set b [body [modelprograms {INFO x OPERABLE false COPY true}]]
+  set b [body [modelprograms {INFO x OPERABLE false COPY true VISIBLE false}]]
   set c [body [modelprograms {}]]
-  list [regexp {"lastExecuteTime":"2026-10-12 21:00:00","description":"Licht am Abend","isOperable":true,"isCopy":false\}} $a] \
-       [regexp {"isOperable":false,"isCopy":true\}} $b] [regexp {"description":"","isOperable":false,"isCopy":false\}} $c]
+  list [regexp {"lastExecuteTime":"2026-10-12 21:00:00","description":"Licht am Abend","isOperable":true,"isCopy":false,"isVisible":true\}} $a] \
+       [regexp {"isOperable":false,"isCopy":true,"isVisible":false\}} $b] [regexp {"description":"","isOperable":false,"isCopy":false,"isVisible":true\}} $c]
 } -result {1 1 1}
 
 set SETACT {*newActive*}
@@ -155,5 +156,113 @@ test programs-14 {the script looks the id up in the program collection; the valu
   regexp {proc programs_setActive.*?\n\}\n} $c body
   list [regexp {foreach\(i, dom.GetObject\(ID_PROGRAMS\).EnumIDs\(\)\)} $body] [regexp {p.Active\(true\)} $body] [regexp {p.Active\(newActive\)} $body] [regexp {dom.GetObject\(\$} $body]
 } -result {1 1 0 0}
+
+# ---- program management: create, copy, change, delete (administrators only)
+set DESCRIBE {*PrgInfo()*}
+set NAMECHK  {*progExcept*}
+set CREATE   {*CreateObject*}
+set COPYTO   {*ProgramCopyTo*}
+set UPDATE   {*setVisible*}
+set DELETE   {*DeleteObject*}
+set DESC1 {NAME {Neu} INFO {Text} ACTIVE {false} VISIBLE {true} OPERABLE {false} DONE {true}}
+proc manage {method body found args} {
+  array set o [list -sessions $::ADMIN -query {} -taken false -extra {}]
+  array set o $args
+  set rega [list [list $::READ $found] [list $::NAMECHK "TAKEN {$o(-taken)} DONE {true}"] [list $::CREATE {ID {2001} ADDED {true}}] \
+    [list $::COPYTO {ID {2002}}] [list $::UPDATE {DONE {true}}] [list $::DELETE {DELETED {true}}] [list $::DESCRIBE $::DESC1]]
+  return [golden::call_raw $body [golden::prepare [list -candidate $::CAND -method $method -contenttype application/json -setenv {REQUEST_URI /api/v2/programs} -query $o(-query) \
+    -header {X-Requested-With XMLHttpRequest} -header {X-Session-Id AbCdEf1234} -sessions $o(-sessions) -rega $rega]]]
+}
+
+test programs-20 {an administrator creates an empty program: the answer is what ReGa holds, the name and text are script variables} -body {
+  set r [manage POST {{"create":true,"name":"Neu","description":"Text"}} {}]
+  list [status $r] [body $r] [regexp {var progName = "Neu";} [scripts $r]] [regexp {var progInfo = "Text";} [scripts $r]] [regexp {Active\(false\)} [scripts $r]]
+} -result [list 200 {{"id":"2001","name":"Neu","description":"Text","isActive":false,"isVisible":true,"isOperable":false}} 1 1 1]
+
+test programs-21 {create and copy are for administrators only (a user and a guest are 403) and run nothing} -body {
+  set out {}
+  foreach s [list $::USER $::GUEST] {
+    set r [manage POST {{"create":true,"name":"Neu"}} {} -sessions $s]
+    set c [manage POST {{"id":"7","copy":true,"name":"Neu"}} $::FOUND -sessions $s]
+    lappend out [status $r] [status $c] [progcalls $r][progcalls $c]
+  }
+  set out
+} -result {403 403 00 403 403 00}
+
+test programs-22 {a name that another ReGa object has is HTTP 409 (error 404) and nothing is created} -body {
+  set r [manage POST {{"create":true,"name":"Taken"}} {} -taken true]
+  set c [manage POST {{"id":"7","copy":true,"name":"Taken"}} $::FOUND -taken true]
+  list [err $r] [regexp {CreateObject} [scripts $r]] [err $c] [regexp {ProgramCopyTo} [scripts $c]]
+} -result {{409 404 {name already in use}} 0 {409 404 {name already in use}} 0}
+
+test programs-23 {a bad name or text is HTTP 422 before any script runs} -body {
+  set out {}
+  foreach json [list {{"create":true}} {{"create":true,"name":""}} {{"create":true,"name":" x"}} \
+                {{"create":true,"name":"a\u0001b"}} "{\"create\":true,\"name\":\"[string repeat x 101]\"}" \
+                "{\"create\":true,\"name\":\"x\",\"description\":\"[string repeat y 1001]\"}" {{"create":false,"name":"x"}} {{"create":true,"name":"x","id":"7"}} {{"create":true,"name":"x","active":true}}] {
+    set r [manage POST $json {}]
+    lappend out [lindex [err $r] 0][progcalls $r]
+  }
+  set out
+} -result {4220 4220 4220 4220 4220 4220 4220 4220 4220}
+
+test programs-24 {a copy: the original must exist and not be internal; the copy is a new program switched off} -body {
+  set a [manage POST {{"id":"7","copy":true,"name":"Kopie"}} $::FOUND]
+  set b [manage POST {{"id":"7","copy":true,"name":"Kopie"}} {FOUND {true} INTERNAL {true} COPY {false} FULL {true}}]
+  set c [manage POST {{"id":"950","copy":true,"name":"Kopie"}} {}]
+  set d [manage POST {{"id":"7","copy":true}} $::FOUND]
+  list [status $a] [body $a] [regexp {var progName = "Kopie";} [scripts $a]] [regexp {Active\(false\)} [scripts $a]] [err $b] [err $c] [err $d]
+} -result [list 200 {{"id":"2002","name":"Neu","description":"Text","isActive":false,"isVisible":true,"isOperable":false}} 1 1 {403 400 {access denied (program)}} {404 501 {program not found}} {422 403 {invalid argument (name)}}]
+
+test programs-25 {a change: only the given fields are written; the answer holds all of them} -body {
+  set r [manage PUT {{"id":"7","description":"Text","isVisible":true}} $::FOUND]
+  set s [scripts $r]
+  list [status $r] [body $r] [regexp {var setName = "false";} $s] [regexp {var setInfo = "true";} $s] [regexp {var setVisible = "true";} $s] [regexp {var setOperable = "false";} $s] [regexp {NAMECHK|progExcept} $s]
+} -result [list 200 {{"id":"7","name":"Neu","description":"Text","isActive":false,"isVisible":true,"isOperable":false}} 1 1 1 1 0]
+
+test programs-26 {a rename checks the name against all objects but the program itself; nothing is written when it is taken} -body {
+  set a [manage PUT {{"id":"7","name":"Taken"}} $::FOUND -taken true]
+  set b [manage PUT {{"id":"7","name":"Fresh"}} $::FOUND]
+  list [err $a] [regexp {setName} [scripts $a]] [status $b] [regexp {var progExcept = "7";} [scripts $b]] [regexp {var newName = "Fresh";} [scripts $b]]
+} -result {{409 404 {name already in use}} 0 200 1 1}
+
+test programs-27 {a bad change is 422: nothing to change, unknown key, bad id or flag, bad name; none of them runs a script} -body {
+  set out {}
+  foreach json {{{"id":"7"}} {{"id":"7","color":"red"}} {{"id":"x","name":"a"}} {{"name":"a"}} {{"id":"7","isVisible":"yes"}} {{"id":"7","isOperable":1}} {{"id":"7","name":""}} {{"id":"7","execute":true}}} {
+    set r [manage PUT $json $::FOUND]
+    lappend out [lindex [err $r] 0][progcalls $r]
+  }
+  set out
+} -result {4220 4220 4220 4220 4220 4220 4220 4220}
+
+test programs-28 {a change needs an administrator; an internal program, a copy and an unknown id are refused/not found} -body {
+  set a [manage PUT {{"id":"7","name":"x"}} $::FOUND -sessions $::USER]
+  set b [manage PUT {{"id":"7","name":"x"}} {FOUND {true} INTERNAL {true} COPY {false} FULL {true}}]
+  set c [manage PUT {{"id":"7","name":"x"}} {FOUND {true} INTERNAL {false} COPY {true} FULL {true}}]
+  list [status $a] [progcalls $a] [err $b] [err $c] [regexp {setName} [scripts $b][scripts $c]]
+} -result {403 0 {403 400 {access denied (program)}} {404 501 {program not found}} 0}
+
+test programs-29 {delete: ?id= only, administrators only, the program is deleted unless the system's own} -body {
+  set a [manage DELETE {} $::FOUND -query id=7]
+  set b [manage DELETE {} $::FOUND -query id=7 -sessions $::USER]
+  set c [manage DELETE {} {FOUND {true} INTERNAL {true} COPY {false} FULL {true}} -query id=7]
+  set d [manage DELETE {} $::FOUND -query id=7a]
+  set e [manage DELETE {} $::FOUND -query {}]
+  list [status $a] [body $a] [regexp {Unerasable} [scripts $a]] [status $b] [regexp {DeleteObject} [scripts $b]] [err $c] [regexp {DeleteObject} [scripts $c]] [err $d] [err $e]
+} -result [list 200 {{"id":"7","deleted":true}} 1 403 0 {403 400 {access denied (program)}} 0 {422 403 {invalid argument (id)}} {422 403 {invalid argument (id)}}]
+
+test programs-30 {a delete ReGa refuses (unerasable) is reported as a failure, not as deleted} -body {
+  set rega [list [list $::READ $::FOUND] [list $::DELETE {DELETED {false}}]]
+  set r [golden::call_raw {} [golden::prepare [list -candidate $::CAND -method DELETE -contenttype application/json -setenv {REQUEST_URI /api/v2/programs} -query id=7 \
+    -header {X-Requested-With XMLHttpRequest} -header {X-Session-Id AbCdEf1234} -sessions $::ADMIN -rega $rega]]]
+  err $r
+} -result {502 501 {the CCU did not take the change}}
+
+test programs-31 {a CCU that does not answer the change gives HTTP 501, never a success} -body {
+  set rega [list [list $::READ $::FOUND] [list $::NAMECHK {TAKEN {false} DONE {true}}]]
+  set r [golden::call_raw {{"id":"7","description":"x"}} [golden::prepare [list -candidate $::CAND -method PUT -contenttype application/json -setenv {REQUEST_URI /api/v2/programs} \
+    -header {X-Requested-With XMLHttpRequest} -header {X-Session-Id AbCdEf1234} -sessions $::ADMIN -rega $rega]]]
+  err $r
+} -result {502 501 {the CCU did not take the change}}
 
 cleanupTests
