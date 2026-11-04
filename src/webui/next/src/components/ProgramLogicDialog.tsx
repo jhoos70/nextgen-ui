@@ -2,6 +2,7 @@ import * as React from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Button } from "@/components/ui/button";
 import { ProgramActionsDialog } from "@/components/ProgramActionsDialog";
+import { ProgramConditionsDialog } from "@/components/ProgramConditionsDialog";
 import { describeChangeError, getProgramLogic, isSessionExpired, type LogicRule, type Program } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { describeAction, describeCondition, describeDelay, VT_STRING } from "@/lib/program-logic";
@@ -12,7 +13,9 @@ export function ProgramLogicDialog({ program, sid, onClose, onExpired, onChanged
   const [rules, setRules] = React.useState<LogicRule[] | null>(null);
   const [error, setError] = React.useState("");
   const [editing, setEditing] = React.useState<number | null>(null);
+  const [editingConds, setEditingConds] = React.useState<number | null>(null);
   const [saved, setSaved] = React.useState(false);
+  const [savedKind, setSavedKind] = React.useState<"actions" | "conditions">("actions");
   const editOpener = React.useRef<HTMLElement | null>(null);
 
   React.useEffect(() => {
@@ -46,7 +49,7 @@ export function ProgramLogicDialog({ program, sid, onClose, onExpired, onChanged
             <p className="text-xs text-[var(--muted-foreground)]">{t("logicReadOnly")}</p>
             {saved && (
               <p role="status" className="text-sm">
-                {t("actionSaved", { name: program.name })}
+                {t(savedKind === "conditions" ? "condSaved" : "actionSaved", { name: program.name })}
               </p>
             )}
             {error && (
@@ -60,7 +63,21 @@ export function ProgramLogicDialog({ program, sid, onClose, onExpired, onChanged
               <section key={ri} className="space-y-2 rounded-md border border-[var(--border)] p-3 text-sm">
                 {rule.hasCondition && (
                   <div>
-                    <h3 className="font-semibold">{heading(rule, ri)}</h3>
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="font-semibold">{heading(rule, ri)}</h3>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-7 px-2 text-xs"
+                        aria-label={`${t("condsEdit")}: ${heading(rule, ri)}`}
+                        onClick={(e) => {
+                          editOpener.current = e.currentTarget;
+                          setEditingConds(ri);
+                        }}
+                      >
+                        {t("condsEdit")}
+                      </Button>
+                    </div>
                     {rule.groups.length === 0 && <p className="text-[var(--muted-foreground)]">—</p>}
                     {rule.groups.map((g, gi) => (
                       <React.Fragment key={gi}>
@@ -123,6 +140,30 @@ export function ProgramLogicDialog({ program, sid, onClose, onExpired, onChanged
           </div>
         </Dialog.Content>
       </Dialog.Portal>
+      {rules && editingConds !== null && rules[editingConds] && (
+        <ProgramConditionsDialog
+          programId={program.id}
+          programName={program.name}
+          isActive={program.isActive}
+          rule={rules[editingConds]}
+          ruleIndex={editingConds}
+          part={heading(rules[editingConds], editingConds)}
+          sid={sid}
+          onExpired={onExpired}
+          onClose={() => {
+            setEditingConds(null);
+            const back = editOpener.current;
+            window.setTimeout(() => back?.isConnected && back.focus(), 0);
+          }}
+          onSaved={(logic) => {
+            setRules(logic.rules);
+            setSaved(true);
+            setSavedKind("conditions");
+            setEditingConds(null);
+            onChanged();
+          }}
+        />
+      )}
       {rules && editing !== null && rules[editing] && (
         <ProgramActionsDialog
           programId={program.id}
@@ -141,6 +182,7 @@ export function ProgramLogicDialog({ program, sid, onClose, onExpired, onChanged
           onSaved={(logic) => {
             setRules(logic.rules);
             setSaved(true);
+            setSavedKind("actions");
             setEditing(null);
             onChanged();
           }}

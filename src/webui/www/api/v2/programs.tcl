@@ -19,6 +19,7 @@
 #   PUT    {"id","name"?,"description"?,"isVisible"?,"isOperable"?}   changes the given fields; the answer holds all four as
 #                             ReGa has them afterwards. "isOperable" is the full access of users who are not administrators.
 #   DELETE ?id=<id>                                deletes a program; the system's own (internal or unerasable) are refused.
+#   GET    ?targets=conditions                     the same for conditions: datapoints that can be read or report, and variables
 #   GET    ?targets=1                              what an action can set: {"datapoints":[...writable ones with their type, range, unit
 #                             and list],"variables":[...]} (administrators)
 #   GET    ?id=<id>                                the logic of a program, decoded: its rules (if / else if / else), the condition
@@ -37,6 +38,16 @@
 #                             failure leaves the program as it was; name, description, flags and the active state are kept. NOTE:
 #                             putting the program back re-activates it as it was: for an ACTIVE program the CCU checks its
 #                             conditions again and it can run at once. The answer is the program as GET gives it.
+#   PUT    {"id","rule":<index>,"conditions":{"op"?,"groups":[{"from"?,"op"?,"conditions":[...]}]}}   EDITS the conditions of a rule
+#                             that has some (not the "else" part). "op" between the groups and "op" of a group ("and" / "or") are
+#                             one choice each, as in the classic editor. A condition is {"from"?,"kind":"device","datapointId",
+#                             "test","value","value2"?,"trigger"?}, {"from"?,"kind":"sysvar","variableId",...} or, for a time
+#                             control, {"from","kind":"time","trigger"?}. test: 1 = (a logic, list or button value), 5 =, 6 between,
+#                             8 >, 9 >=, 10 <, 11 <=, 12 !=; trigger: 4 on change, 13 on update, 15 check only. "from" is the
+#                             position in the program as GET gives it (group, and condition within the group): what is not named
+#                             is DELETED, what is new is appended after the kept ones (ReGa cannot insert or move). A time control
+#                             cannot be created, moved or turned into something else here, and deleting one (or its group) destroys
+#                             its timer. Written on a working copy like the actions; the answer is the program as GET gives it.
 # A name is 1..100 characters without control characters and must not belong to any other ReGa object (HTTP 409, error 404
 # "name already in use"); a description is up to 1000 characters. The conditions and actions of a program are not
 # editable here. Every create, copy, change and delete is one line in the syslog.
@@ -651,6 +662,540 @@ proc programs_applyActions { id rule plan stopDelays } {
   return 1
 }
 
+set PROGRAM_GROUPS_MAX 20
+set PROGRAM_CONDS_MAX 30
+set PROGRAM_TESTS {1 5 6 8 9 10 11 12}
+set PROGRAM_TRIGGERS {1 4 13 15}
+
+##
+# The structure of the conditions of a rule as it is now: the number of groups and, per group, the kind of each single condition
+# (device, sysvar, time, other). "" = ReGa did not answer; "norule" = there is no such rule; "nocond" = the rule has no conditions
+# (the else part).
+##
+proc programs_condStructure { id rule } {
+  set script {
+    string i;
+    foreach(i, dom.GetObject(ID_PROGRAMS).EnumIDs())
+    {
+      if (i == progId)
+      {
+        var p = dom.GetObject(i);
+        if (p)
+        {
+          integer k = 0;
+          integer want = ruleIdx.ToInteger();
+          object r = p.Rule();
+          while (r)
+          {
+            if (k == want)
+            {
+              WriteLine("RULE HASCOND {" # r.ElseIfFlag() # "}");
+              integer nc = r.RuleConditions().Count();
+              if (nc > 0)
+              {
+                string ci;
+                foreach (ci, system.GenerateEnum(0, nc - 1))
+                {
+                  object c = r.RuleCondition(ci);
+                  integer ns = c.CndSingleCount();
+                  string line = "";
+                  if (ns > 0)
+                  {
+                    string si;
+                    foreach (si, system.GenerateEnum(0, ns - 1)) { line = line # " " # c.CndSingleCondition(si).LeftValType(); }
+                  }
+                  WriteLine("GROUP G {" # ci # "} KINDS {" # line # "}");
+                }
+              }
+            }
+            r = r.RuleSubRule();
+            k = k + 1;
+          }
+          WriteLine("END DONE {true}");
+        }
+      }
+    }
+  }
+  array set a [list progId $id ruleIdx $rule]
+  set out ""
+  catch { set out [hmscript $script a] }
+  set hasRule 0
+  set hasCond 0
+  set groups {}
+  set done 0
+  foreach line [split $out "\n"] {
+    set line [string trim $line]
+    if { "" == $line || [catch { llength $line }] } then { continue }
+    array unset f
+    if { [catch { array set f [lrange $line 1 end] }] } then { continue }
+    switch -- [lindex $line 0] {
+      RULE { set hasRule 1; set hasCond [string is true -strict $f(HASCOND)] }
+      GROUP {
+        set kinds {}
+        foreach lt $f(KINDS) { lappend kinds [expr { 18 == $lt ? "device" : 19 == $lt ? "sysvar" : 24 == $lt ? "time" : "other" }] }
+        lappend groups $kinds
+      }
+      END { set done 1 }
+    }
+  }
+  if { !$done } then { return "" }
+  if { !$hasRule } then { return norule }
+  if { !$hasCond } then { return nocond }
+  return [list $groups]
+}
+
+##
+# What a datapoint (readable or reporting) or a system variable is, for a condition. Alarms count as logic values; a text
+# variable and the like are not supported ("").
+##
+proc programs_condTargetInfo { kind id } {
+  if { "device" eq $kind } then {
+    set script {
+      var dp = dom.GetObject(progTarget);
+      if (dp)
+      {
+        if (dp.TypeName() == "HSSDP")
+        {
+          var ch = dom.GetObject(dp.Channel());
+          if (ch)
+          {
+            if (false == ch.Internal())
+            {
+              if ((OPERATION_READ | OPERATION_EVENT) & dp.Operations())
+              {
+                Write("TYPE {" # dp.ValueType() # "} SUB {" # dp.ValueSubType() # "} MIN {" # dp.ValueMin() # "} MAX {" # dp.ValueMax() # "} UNIT {" # dp.ValueUnit() # "} LIST {" # dp.ValueList() # "} CH {" # dp.Channel() # "} DONE {true}");
+              }
+            }
+          }
+        }
+      }
+    }
+  } else {
+    set script {
+      string i;
+      foreach(i, dom.GetObject(ID_SYSTEM_VARIABLES).EnumIDs())
+      {
+        if (i == progTarget)
+        {
+          var sv = dom.GetObject(i);
+          if (sv)
+          {
+            boolean takeSv = false;
+            if (sv.Visible()) { if (false == sv.Internal()) { takeSv = true; } }
+            if (takeSv)
+            {
+              Write("TYPE {" # sv.ValueType() # "} SUB {" # sv.ValueSubType() # "} MIN {" # sv.ValueMin() # "} MAX {" # sv.ValueMax() # "} UNIT {" # sv.ValueUnit() # "} LIST {" # sv.ValueList() # "} CH {65535} DONE {true}");
+            }
+          }
+        }
+      }
+    }
+  }
+  array set a [list progTarget $id]
+  array set t {}
+  catch { array set t [hmscript $script a] }
+  if { ![info exists t(DONE)] } then { return "" }
+  return [array get t]
+}
+
+##
+# One condition of the request, checked against ReGa and turned into a plan entry:
+#   {kind K target ID test T trigger G valueKind VK right R right2 R2 from F}
+# or {kind time from F trigger G}. $f names the field in the answer of HTTP 422.
+##
+proc programs_planCondition { c f structure gi } {
+  global PROGRAM_TESTS PROGRAM_TRIGGERS
+  if { [catch { array set x $c }] } then { jsonrpc_error 403 "invalid argument ($f)" }
+  foreach key [array names x] {
+    if { $key ni {from kind datapointId variableId test value value2 trigger} } then { jsonrpc_error 403 "invalid argument ($f.[regsub -all {[^A-Za-z0-9_.-]} [string range $key 0 39] _])" }
+  }
+  if { ![info exists x(kind)] || $x(kind) ni {device sysvar time} } then { jsonrpc_error 403 "invalid argument ($f.kind)" }
+  set from -1
+  if { [info exists x(from)] } then {
+    if { ![regexp {^[0-9]{1,3}$} $x(from)] || $gi < 0 || $x(from) >= [llength [lindex $structure $gi]] } then { jsonrpc_error 403 "invalid argument ($f.from)" }
+    scan $x(from) %d from
+  }
+  set trigger 4
+  if { [info exists x(trigger)] } then {
+    if { ![regexp {^[0-9]{1,2}$} $x(trigger)] || $x(trigger) ni $PROGRAM_TRIGGERS } then { jsonrpc_error 403 "invalid argument ($f.trigger)" }
+    set trigger $x(trigger)
+  }
+  if { "time" eq $x(kind) } then {
+    # a time control stays where it is: it is only kept (its timer cannot be made here) and may change how it triggers
+    if { $from < 0 || "time" ne [lindex [lindex $structure $gi] $from] } then { jsonrpc_error 403 "invalid argument ($f.from)" }
+    if { ![info exists x(trigger)] } then { set trigger 13 }
+    if { $trigger ni {13 15} } then { jsonrpc_error 403 "invalid argument ($f.trigger)" }
+    return [list kind time from $from trigger $trigger]
+  }
+  if { $from >= 0 && "time" eq [lindex [lindex $structure $gi] $from] } then { jsonrpc_error 403 "invalid argument ($f.from)" }
+  set idKey [expr { "device" eq $x(kind) ? "datapointId" : "variableId" }]
+  if { ![info exists x($idKey)] || ![regexp {^[0-9]{1,10}$} $x($idKey)] } then { jsonrpc_error 403 "invalid argument ($f.$idKey)" }
+  set info [programs_condTargetInfo $x(kind) $x($idKey)]
+  if { "" == $info } then { jsonrpc_error 403 "invalid argument ($f.$idKey)" }
+  array set t $info
+  if { ![info exists x(test)] || ![regexp {^[0-9]{1,2}$} $x(test)] || $x(test) ni $PROGRAM_TESTS } then { jsonrpc_error 403 "invalid argument ($f.test)" }
+  if { ![info exists x(value)] } then { jsonrpc_error 403 "invalid argument ($f.value)" }
+  set kindOfValue ""
+  set right ""
+  set right2 ""
+  switch -- $t(TYPE) {
+    2 {
+      # a logic value, an alarm or a button: only "is"
+      if { 1 != $x(test) } then { jsonrpc_error 403 "invalid argument ($f.test)" }
+      if { $x(value) ne "true" && ($x(value) ne "false" || 28 == $t(SUB)) } then { jsonrpc_error 403 "invalid argument ($f.value)" }
+      set kindOfValue BOOL
+      set right $x(value)
+      if { 28 == $t(SUB) } then { set trigger 1 } elseif { 1 == $trigger } then { set trigger 4 }
+    }
+    16 {
+      if { 29 == $t(SUB) } then {
+        set n [llength [split $t(LIST) ";"]]
+        if { 1 != $x(test) } then { jsonrpc_error 403 "invalid argument ($f.test)" }
+        if { ![regexp {^[0-9]{1,4}$} $x(value)] || [scan $x(value) %d right] != 1 || $right >= $n } then { jsonrpc_error 403 "invalid argument ($f.value)" }
+        set kindOfValue INT
+        if { 1 == $trigger } then { set trigger 4 }
+      }
+    }
+  }
+  if { "" == $kindOfValue } then {
+    # a number (integer, float or scaling): the comparisons that take one value, or "between"
+    if { $t(TYPE) ni {4 5 6 16} || 1 == $x(test) } then { jsonrpc_error 403 "invalid argument ($f.[expr { $t(TYPE) in {4 5 6 16} ? "test" : "datapointId" }])" }
+    set integer [expr { 16 == $t(TYPE) }]
+    set re [expr { $integer ? {^-?[0-9]{1,9}$} : {^-?[0-9]{1,15}(\.[0-9]{1,6})?$} }]
+    if { ![regexp $re $x(value)] } then { jsonrpc_error 403 "invalid argument ($f.value)" }
+    set right $x(value)
+    if { 6 == $x(test) } then {
+      if { ![info exists x(value2)] || ![regexp $re $x(value2)] || double($x(value)) > double($x(value2)) } then { jsonrpc_error 403 "invalid argument ($f.value2)" }
+      set right2 $x(value2)
+    }
+    if { "100%" eq $t(UNIT) } then {
+      set right [format %.6f [expr { double($right) / 100.0 }]]
+      if { "" ne $right2 } then { set right2 [format %.6f [expr { double($right2) / 100.0 }]] }
+    }
+    set kindOfValue [expr { $integer ? "INT" : "FLOAT" }]
+    if { 1 == $trigger } then { set trigger 4 }
+  }
+  return [list kind $x(kind) target $x($idKey) test $x(test) trigger $trigger valueKind $kindOfValue right $right right2 $right2 from $from]
+}
+
+##
+# The whole conditions of a request as a plan, checked against the structure of the rule as it is now. Returns
+# {groupOp OP groups {{from G op OP singles {entry ...}} ...}}; answers HTTP 422 naming the field otherwise.
+##
+proc programs_planConditions { cond structure } {
+  global PROGRAM_GROUPS_MAX PROGRAM_CONDS_MAX
+  if { [catch { array set c $cond }] } then { jsonrpc_error 403 "invalid argument (conditions)" }
+  foreach key [array names c] { if { $key ni {op groups} } then { jsonrpc_error 403 "invalid argument (conditions.[regsub -all {[^A-Za-z0-9_.-]} [string range $key 0 39] _])" } }
+  if { ![info exists c(groups)] || ![regexp {"groups"\s*:\s*\[} [v2_body]] || [llength $c(groups)] > $PROGRAM_GROUPS_MAX } then { jsonrpc_error 403 "invalid argument (conditions.groups)" }
+  set groupOp and
+  if { [info exists c(op)] } then {
+    if { $c(op) ni {and or} } then { jsonrpc_error 403 "invalid argument (conditions.op)" }
+    set groupOp $c(op)
+  }
+  set plan {}
+  set seenGroups {}
+  set lastKept -1
+  set sawNew 0
+  set gn 0
+  foreach g $c(groups) {
+    set gf "conditions.groups\[$gn\]"
+    if { [catch { array set gx $g }] } then { jsonrpc_error 403 "invalid argument ($gf)" }
+    foreach key [array names gx] { if { $key ni {from op conditions} } then { jsonrpc_error 403 "invalid argument ($gf.[regsub -all {[^A-Za-z0-9_.-]} [string range $key 0 39] _])" } }
+    set from -1
+    if { [info exists gx(from)] } then {
+      if { ![regexp {^[0-9]{1,3}$} $gx(from)] || $gx(from) >= [llength $structure] } then { jsonrpc_error 403 "invalid argument ($gf.from)" }
+      scan $gx(from) %d from
+      # the kept groups stay in their order, and no group is kept twice
+      if { $from <= $lastKept || $sawNew } then { jsonrpc_error 403 "invalid argument ($gf.from)" }
+      set lastKept $from
+    } else { set sawNew 1 }
+    set innerOp and
+    if { [info exists gx(op)] } then {
+      if { $gx(op) ni {and or} } then { jsonrpc_error 403 "invalid argument ($gf.op)" }
+      set innerOp $gx(op)
+    }
+    if { ![info exists gx(conditions)] || 0 == [llength $gx(conditions)] || [llength $gx(conditions)] > $PROGRAM_CONDS_MAX } then { jsonrpc_error 403 "invalid argument ($gf.conditions)" }
+    set singles {}
+    set lastSingle -1
+    set sawNewSingle 0
+    set cn 0
+    foreach cc $gx(conditions) {
+      set cf "$gf.conditions\[$cn\]"
+      set entry [programs_planCondition $cc $cf $structure $from]
+      set sf [dict get $entry from]
+      if { $sf >= 0 } then {
+        if { $sf <= $lastSingle || $sawNewSingle } then { jsonrpc_error 403 "invalid argument ($cf.from)" }
+        set lastSingle $sf
+      } else {
+        if { "time" eq [dict get $entry kind] } then { jsonrpc_error 403 "invalid argument ($cf.kind)" }
+        set sawNewSingle 1
+      }
+      lappend singles $entry
+      incr cn
+    }
+    # a group that is new cannot hold a kept condition (ReGa cannot move one)
+    if { $from < 0 } then { foreach e $singles { if { [dict get $e from] >= 0 } then { jsonrpc_error 403 "invalid argument ($gf.conditions)" } } }
+    lappend plan [list from $from op $innerOp singles $singles]
+    array unset gx
+    incr gn
+  }
+  return [list groupOp $groupOp groups $plan]
+}
+
+##
+# One operation on the working copy (a ReGa script with its variables): the answer of the script, or "" when ReGa did not
+# report DONE true.
+##
+proc programs_condOp { script copy rule args } {
+  # ReGa rejects the WHOLE script when it names a variable that is not defined, even in a branch that does not run: every
+  # variable of the script gets a value, the arguments override them
+  set defaults [list opName "" grpIdx 0 sglIdx "" opCode 1 trigger 4 kindName "" targetId 0 testCode 1 valueKind "" rv1 "" rv2 ""]
+  array set pa [concat [list copyId $copy ruleIdx $rule] $defaults $args]
+  array set pr {}
+  catch { array set pr [hmscript $script pa] }
+  if { ![info exists pr(DONE)] || ![string is true -strict $pr(DONE)] } then {
+    catch { api_syslog daemon.warning "cid=[api_cid] method=PUT /api/v2/programs uid=[v2_sessionUid] the operation $pa(opName) on the working copy failed" }
+    return ""
+  }
+  return [array get pr]
+}
+
+##
+# Writes a conditions plan: on a working copy of the program, in place (a time control keeps its timer), then the copy is put back
+# over the original in one step. Any failure deletes the copy and leaves the original as it was. Returns 1 on success.
+##
+proc programs_applyConditions { id rule structure plan } {
+  set begin {
+    string i;
+    foreach(i, dom.GetObject(ID_PROGRAMS).EnumIDs())
+    {
+      if (i == progId)
+      {
+        var p = dom.GetObject(i);
+        if (p)
+        {
+          var c = p.ProgramCopyTo();
+          if (c) { Write("COPY {" # c.ID() # "} DONE {true}"); }
+        }
+      }
+    }
+  }
+  set op {
+    var c = dom.GetObject(copyId);
+    boolean ok = false;
+    if (c)
+    {
+      integer k = 0;
+      integer want = ruleIdx.ToInteger();
+      object r = c.Rule();
+      while (r)
+      {
+        if (k == want)
+        {
+          if (opName == "addGroup")
+          {
+            object ng = r.RuleAddCondition();
+            if (ng) { ok = true; Write("INDEX {" # (r.RuleConditions().Count() - 1) # "} "); }
+          }
+          if (opName == "delGroup")
+          {
+            object dg = r.RuleCondition(grpIdx.ToInteger());
+            if (dg) { ok = r.RuleDelCondition(dg.ID()); }
+          }
+          if (opName == "delSingle")
+          {
+            object g1 = r.RuleCondition(grpIdx.ToInteger());
+            if (g1) { object d1 = g1.CndSingleCondition(sglIdx.ToInteger()); if (d1) { ok = g1.CndDelSingle(d1.ID()); } }
+          }
+          if (opName == "groupOp")
+          {
+            object g2 = r.RuleCondition(grpIdx.ToInteger());
+            if (g2) { g2.CndOperatorType(opCode.ToInteger()); ok = true; }
+          }
+          if (opName == "innerOp")
+          {
+            object g3 = r.RuleCondition(grpIdx.ToInteger());
+            if (g3)
+            {
+              integer n3 = g3.CndSingleCount();
+              integer j3 = 0;
+              while (j3 < n3) { g3.CndSingleCondition(j3).OperatorType(opCode.ToInteger()); j3 = j3 + 1; }
+              ok = true;
+            }
+          }
+          if (opName == "timeTrigger")
+          {
+            object g4 = r.RuleCondition(grpIdx.ToInteger());
+            if (g4) { object s4 = g4.CndSingleCondition(sglIdx.ToInteger()); if (s4) { s4.ConditionType2(trigger.ToInteger()); ok = true; } }
+          }
+          if (opName == "setSingle")
+          {
+            object g5 = r.RuleCondition(grpIdx.ToInteger());
+            if (g5)
+            {
+              object s5 = null;
+              if (sglIdx == "") { s5 = g5.CndAddSingle(); } else { s5 = g5.CndSingleCondition(sglIdx.ToInteger()); }
+              object tgt = dom.GetObject(targetId.ToInteger());
+              if (s5)
+              {
+                if (tgt)
+                {
+                  if (kindName == "device")
+                  {
+                    s5.LeftValType(ivtObjectId);
+                    s5.LeftVal(tgt.ID());
+                    s5.ConditionChannel(tgt.Channel());
+                  }
+                  else
+                  {
+                    s5.LeftValType(ivtSystemId);
+                    s5.LeftVal(tgt.ID());
+                    s5.ConditionChannel(ID_ERROR);
+                  }
+                  s5.ConditionType(testCode.ToInteger());
+                  s5.ConditionType2(trigger.ToInteger());
+                  if (valueKind == "BOOL") { if (rv1 == "true") { s5.RightVal1(true); } else { s5.RightVal1(false); } }
+                  if (valueKind == "INT") { integer iv = rv1.ToInteger(); s5.RightVal1(iv); }
+                  if (valueKind == "FLOAT") { real fv = rv1.ToFloat(); s5.RightVal1(fv); }
+                  if (rv2 != "") { real fv2 = rv2.ToFloat(); s5.RightVal2(fv2); }
+                  ok = true;
+                }
+              }
+            }
+          }
+          if (opName == "counts")
+          {
+            integer n6 = r.RuleConditions().Count();
+            string line6 = "";
+            if (n6 > 0) { string ci6; foreach (ci6, system.GenerateEnum(0, n6 - 1)) { line6 = line6 # " " # r.RuleCondition(ci6).CndSingleCount(); } }
+            Write("COUNTS {" # line6 # "} ");
+            ok = true;
+          }
+        }
+        r = r.RuleSubRule();
+        k = k + 1;
+      }
+    }
+    Write("DONE {" # ok # "}");
+  }
+  set commit {
+    var c = dom.GetObject(copyId);
+    var p = dom.GetObject(progId);
+    boolean ok = false;
+    if (c)
+    {
+      if (p)
+      {
+        if ((c.ProgramCopyID() != ID_ERROR) && (c.ID() != p.ID()))
+        {
+          boolean wasActive = p.Active();
+          c.ProgramCopyTo(p.ID());
+          dom.DeleteObject(c.ID());
+          p.ProgramCopyID(ID_ERROR);
+          p.ProgramUpdate();
+          p.Active(wasActive);
+          ok = true;
+        }
+      }
+    }
+    Write("DONE {" # ok # "}");
+  }
+  set abort {
+    var c = dom.GetObject(copyId);
+    if (c)
+    {
+      if (c.IsTypeOf(OT_PROGRAM))
+      {
+        if ((c.ProgramCopyID() != ID_ERROR) && (c.ID() != progId.ToInteger())) { dom.DeleteObject(c.ID()); }
+      }
+    }
+    Write("DONE {true}");
+  }
+
+  array set a [list progId $id]
+  array set b {}
+  catch { array set b [hmscript $begin a] }
+  if { ![info exists b(COPY)] } then { return 0 }
+  set copy $b(COPY)
+  set fail 0
+  set groups [dict get $plan groups]
+  set keptOld {}
+  foreach g $groups { if { [dict get $g from] >= 0 } then { lappend keptOld [dict get $g from] } }
+
+  # 1. the groups that are not kept go (from the end, so the positions below stay right)
+  for { set og [expr { [llength $structure] - 1 }] } { $og >= 0 && !$fail } { incr og -1 } {
+    if { $og ni $keptOld } then { if { "" == [programs_condOp $op $copy $rule opName delGroup grpIdx $og] } then { set fail 1 } }
+  }
+  # 2. in the kept groups the conditions that are not kept go; 3. the kept ones are updated in place
+  set gi 0
+  foreach g $groups {
+    if { $fail } then { break }
+    if { [dict get $g from] >= 0 } then {
+      set og [dict get $g from]
+      set keptSingles {}
+      foreach e [dict get $g singles] { if { [dict get $e from] >= 0 } then { lappend keptSingles [dict get $e from] } }
+      for { set si [expr { [llength [lindex $structure $og]] - 1 }] } { $si >= 0 && !$fail } { incr si -1 } {
+        if { $si ni $keptSingles } then { if { "" == [programs_condOp $op $copy $rule opName delSingle grpIdx $gi sglIdx $si] } then { set fail 1 } }
+      }
+      set rank 0
+      foreach e [dict get $g singles] {
+        if { $fail || [dict get $e from] < 0 } then { continue }
+        if { "time" eq [dict get $e kind] } then {
+          if { "" == [programs_condOp $op $copy $rule opName timeTrigger grpIdx $gi sglIdx $rank trigger [dict get $e trigger]] } then { set fail 1 }
+        } else {
+          if { "" == [programs_condOp $op $copy $rule opName setSingle grpIdx $gi sglIdx $rank kindName [dict get $e kind] targetId [dict get $e target] testCode [dict get $e test] trigger [dict get $e trigger] valueKind [dict get $e valueKind] rv1 [dict get $e right] rv2 [dict get $e right2]] } then { set fail 1 }
+        }
+        incr rank
+      }
+      incr gi
+    }
+  }
+  # 4. what is new is appended: new conditions to the kept groups, then the new groups
+  set gi 0
+  foreach g $groups {
+    if { $fail } then { break }
+    if { [dict get $g from] < 0 } then {
+      set r [programs_condOp $op $copy $rule opName addGroup]
+      if { "" == $r } then { set fail 1; break }
+      array set ri $r
+      set gi $ri(INDEX)
+      array unset ri
+    }
+    foreach e [dict get $g singles] {
+      if { $fail } then { break }
+      if { [dict get $e from] >= 0 } then { continue }
+      if { "" == [programs_condOp $op $copy $rule opName setSingle grpIdx $gi sglIdx "" kindName [dict get $e kind] targetId [dict get $e target] testCode [dict get $e test] trigger [dict get $e trigger] valueKind [dict get $e valueKind] rv1 [dict get $e right] rv2 [dict get $e right2]] } then { set fail 1 }
+    }
+    if { [dict get $g from] >= 0 } then { incr gi }
+  }
+  # 5. the operators: one between the groups, one inside each group (as the classic editor keeps them)
+  set n 0
+  foreach g $groups {
+    if { $fail } then { break }
+    if { "" == [programs_condOp $op $copy $rule opName groupOp grpIdx $n opCode [expr { "and" eq [dict get $plan groupOp] ? 1 : 2 }]] } then { set fail 1; break }
+    if { "" == [programs_condOp $op $copy $rule opName innerOp grpIdx $n opCode [expr { "and" eq [dict get $g op] ? 1 : 2 }]] } then { set fail 1; break }
+    incr n
+  }
+  # 6. the copy must have exactly the structure that was asked for
+  if { !$fail } then {
+    set want {}
+    foreach g $groups { lappend want [llength [dict get $g singles]] }
+    set r [programs_condOp $op $copy $rule opName counts]
+    array set cn {}
+    if { "" != $r } then { array set cn $r }
+    if { ![info exists cn(COUNTS)] || [string trim $cn(COUNTS)] ne [join $want " "] } then { set fail 1 }
+  }
+  if { !$fail } then {
+    array set cm [list copyId $copy progId $id]
+    array set done {}
+    catch { array set done [hmscript $commit cm] }
+    if { [info exists done(DONE)] && [string is true -strict $done(DONE)] } then { return 1 }
+  }
+  array set ab [list copyId $copy progId $id]
+  catch { hmscript $abort ab }
+  return 0
+}
+
 proc programs_parseBody { allowed } {
   set text [v2_body]
   if { [catch { array set body [json_parseObject text] } cause] } then {
@@ -660,6 +1205,30 @@ proc programs_parseBody { allowed } {
     if { $key ni $allowed } then { jsonrpc_error 403 "invalid argument ([regsub -all {[^A-Za-z0-9_.-]} [string range $key 0 39] _])" }
   }
   return [array get body]
+}
+
+proc programs_putConditions { uid bodyList } {
+  array set body $bodyList
+  foreach k {name description isVisible isOperable actions stopDelays} { if { [info exists body($k)] } then { jsonrpc_error 403 "invalid argument ($k)" } }
+  if { ![info exists body(rule)] || ![regexp {^[0-9]{1,2}$} $body(rule)] } then { jsonrpc_error 403 "invalid argument (rule)" }
+  set id $body(id)
+  programs_requireManageable $id
+  scan $body(rule) %d rule
+  set structure [programs_condStructure $id $rule]
+  if { "" == $structure } then { programs_failed PUT "read the conditions of program $id" }
+  if { "norule" eq $structure } then { jsonrpc_error 403 "invalid argument (rule)" }
+  if { "nocond" eq $structure } then { jsonrpc_error 403 "invalid argument (rule)" }
+  set structure [lindex $structure 0]
+  set plan [programs_planConditions $body(conditions) $structure]
+  if { ![programs_applyConditions $id $rule $structure $plan] } then { programs_failed PUT "change the conditions of program $id" }
+  set n 0
+  foreach g [dict get $plan groups] { incr n [llength [dict get $g singles]] }
+  api_syslog daemon.notice "cid=[api_cid] method=PUT /api/v2/programs uid=$uid action=change the conditions of program $id rule $rule: [llength [dict get $plan groups]] group(s), $n condition(s)"
+  set d [programs_describe $id]
+  set rules [programs_logic $id]
+  if { "" == $d || "" == $rules } then { programs_failed PUT "read program $id after the change" }
+  set base [programs_json $id $d]
+  v2_respondJson "[string range $base 0 end-1],\"rules\":$rules\}"
 }
 
 proc programs_putActions { uid bodyList } {
@@ -699,8 +1268,12 @@ proc programs_manage { verb } {
   }
 
   if { "PUT" eq $verb } then {
-    array set body [programs_parseBody {id name description isVisible isOperable rule actions stopDelays}]
+    array set body [programs_parseBody {id name description isVisible isOperable rule actions stopDelays conditions}]
     if { ![info exists body(id)] || ![regexp {^[0-9]{1,10}$} $body(id)] } then { jsonrpc_error 403 "invalid argument (id)" }
+    if { [info exists body(conditions)] } then {
+      programs_putConditions $uid [array get body]
+      return
+    }
     if { [info exists body(actions)] || [info exists body(rule)] || [info exists body(stopDelays)] } then {
       programs_putActions $uid [array get body]
       return
@@ -977,7 +1550,7 @@ proc programs_actJson { a } {
 # The things an action can set: every writable datapoint of a device channel and every system variable that users may set. One
 # bulk script (never one per device); the answer is {"datapoints":[...],"variables":[...]}.
 ##
-proc programs_targets { } {
+proc programs_targets { mode } {
   set dpScript {
     string dId;
     string cId;
@@ -998,7 +1571,7 @@ proc programs_targets { } {
             {
               var dp = dom.GetObject(pId);
               boolean takeDp = false;
-              if (dp) { if (dp.TypeName() == "HSSDP") { if (!dp.Internal()) { if (OPERATION_WRITE & dp.Operations()) { takeDp = true; } } } }
+              if (dp) { if (dp.TypeName() == "HSSDP") { if (!dp.Internal()) { if (%DPOPS% & dp.Operations()) { takeDp = true; } } } }
               if (takeDp)
               {
                 WriteLine("{");
@@ -1028,7 +1601,7 @@ proc programs_targets { } {
       if (sv)
       {
         boolean takeSv = false;
-        if (sv.Visible()) { if (false == sv.Internal()) { if (sv.ValueSubType() != istAlarm) { takeSv = true; } } }
+        if (sv.Visible()) { if (false == sv.Internal()) { %SVFILTER% } }
         if (takeSv)
         {
           WriteLine("{");
@@ -1046,6 +1619,15 @@ proc programs_targets { } {
         }
       }
     }
+  }
+  # actions set things (writable datapoints, no alarm variables); conditions look at them (readable or reporting datapoints, alarms
+  # are logic values, a text variable is not supported)
+  if { "conditions" eq $mode } then {
+    set dpScript [string map [list %DPOPS% "(OPERATION_READ | OPERATION_EVENT)"] $dpScript]
+    set svScript [string map [list %SVFILTER% "if (sv.ValueType() != ivtString) { takeSv = true; }"] $svScript]
+  } else {
+    set dpScript [string map [list %DPOPS% OPERATION_WRITE] $dpScript]
+    set svScript [string map [list %SVFILTER% "if (sv.ValueSubType() != istAlarm) { takeSv = true; }"] $svScript]
   }
   set dps {}
   foreach rec [v2_records [hmscript $dpScript]] {
@@ -1067,8 +1649,8 @@ proc programs_targets { } {
 proc programs_detail { } {
   global V2_QUERY
   v2_requireLevel ADMIN
-  if { "targets=1" eq $V2_QUERY } then {
-    v2_respondJson [programs_targets]
+  if { "targets=1" eq $V2_QUERY || "targets=conditions" eq $V2_QUERY } then {
+    v2_respondJson [programs_targets [expr { "targets=1" eq $V2_QUERY ? "actions" : "conditions" }]]
     return
   }
   if { ![regexp {^id=([0-9]{1,10})$} $V2_QUERY -> id] } then { jsonrpc_error 403 "invalid argument (id)" }

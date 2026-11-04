@@ -26,7 +26,7 @@ import {
 const MAX_SHOWN = 50;
 
 /** One target to choose from: a datapoint as "channel · PARAM", a variable by its name. */
-function TargetPicker({ kind, targets, value, onChange, label }: { kind: ActionKind; targets: ProgramTargets; value: string; onChange: (id: string) => void; label: string }) {
+export function TargetPicker({ kind, targets, value, onChange, label }: { kind: ActionKind; targets: ProgramTargets; value: string; onChange: (id: string) => void; label: string }) {
   const { t } = useI18n();
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
@@ -73,7 +73,7 @@ function TargetPicker({ kind, targets, value, onChange, label }: { kind: ActionK
 }
 
 /** The input that fits the target's type. */
-function ValueInput({ meta, value, onChange, labelOf }: { meta: TargetMeta & { valueName0?: string; valueName1?: string }; value: string; onChange: (v: string) => void; labelOf: string }) {
+export function ValueInput({ meta, value, onChange, labelOf, ranged = true }: { meta: TargetMeta & { valueName0?: string; valueName1?: string }; value: string; onChange: (v: string) => void; labelOf: string; ranged?: boolean }) {
   const { t } = useI18n();
   const kind = inputKind(meta);
   if (kind === "trigger") return <span className="text-sm">{t("actionTrigger")}</span>;
@@ -103,7 +103,7 @@ function ValueInput({ meta, value, onChange, labelOf }: { meta: TargetMeta & { v
   const unit = isPercent(meta) ? "%" : meta.unit;
   return (
     <span className="flex items-center gap-1">
-      <Input aria-label={labelOf} type="number" inputMode="decimal" step={kind === "integer" ? 1 : "any"} min={range?.min} max={range?.max} value={value} onChange={(e) => onChange(e.target.value)} className="h-8 w-28 text-sm" />
+      <Input aria-label={labelOf} type="number" inputMode="decimal" step={kind === "integer" ? 1 : "any"} min={ranged ? range?.min : undefined} max={ranged ? range?.max : undefined} value={value} onChange={(e) => onChange(e.target.value)} className="h-8 w-28 text-sm" />
       {unit && <span className="text-sm text-[var(--muted-foreground)]">{unit}</span>}
     </span>
   );

@@ -100,7 +100,7 @@ test programs-7 {only GET, POST, PUT and DELETE are allowed (PATCH is 405 with t
 test programs-8 {the scripts (read, run, switch, describe, change, copy, delete) look the id up in the program collection and the id is a script variable, never code} -body {
   set fd [open [file join $gen rega-model v2 programs.tcl] r]; set c [read $fd]; close $fd
   list [regexp -all {foreach\(i, dom.GetObject\(ID_PROGRAMS\).EnumIDs\(\)\)} $c] [regexp {dom.GetObject\(\$} $c] [regexp -all {ProgramExecute\(\)} $c]
-} -result {9 0 1}
+} -result {11 0 1}
 
 proc modelprograms {extra} {
   set rec [concat {ID 1053 NAME Evening TIME {2026-10-12 21:00:00} ACTIVE true INTERNAL false} $extra]
@@ -452,8 +452,130 @@ test programs-60 {the targets of an action: writable datapoints and variables, w
 test programs-61 {the targets are for administrators only, and the scripts leave out what must not be set: internal objects, alarms} -body {
   set a [targets -sessions $::USER]
   set fd [open [file join $gen rega-model v2 programs.tcl] r]; set c [read $fd]; close $fd
-  regexp {proc programs_targets \{ \} \{.*?\n\}\n} $c body
-  list [status $a] [regexp {OPERATION_WRITE & dp.Operations\(\)} $body] [regexp {istAlarm} $body] [regexp {sv.Internal\(\)} $body] [regexp {dp.Internal\(\)} $body]
+  regexp {proc programs_targets \{ mode \} \{.*?\n\}\n} $c body
+  list [status $a] [regexp {%DPOPS% & dp.Operations\(\)} $body] [regexp {istAlarm} $body] [regexp {sv.Internal\(\)} $body] [regexp {dp.Internal\(\)} $body]
 } -result {403 1 1 1 1}
+
+# ---- editing the conditions of a rule (PUT {id, rule, conditions}, administrators)
+set C_STRUCT  {*KINDS*}
+set C_BEGIN   {*Write("COPY {" # c.ID() # "} DONE {true}")*}
+set C_COUNTS  {*var opName = "counts";*}
+set C_ADDGRP  {*var opName = "addGroup";*}
+set C_OP      {*var opName*}
+set C_COMMIT  {*wasActive*}
+set C_ABORT   {*progId.ToInteger()*}
+set C_DP      {*progTarget*OPERATION_READ*}
+set STRUCT1   [join [list {RULE HASCOND {true}} {GROUP G {0} KINDS { 18 24 19}} {END DONE {true}}] "\r\n"]
+proc putcond {body args} {
+  array set o [list -sessions $::ADMIN -struct $::STRUCT1 -counts {COUNTS {3 1} DONE {true}} -op {DONE {true}} -commit {DONE {true}} -dp $::TEMPDP]
+  array set o $args
+  set rega [list [list $::C_STRUCT $o(-struct)] [list $::C_BEGIN {COPY {2002} DONE {true}}] [list $::C_COUNTS $o(-counts)] [list $::C_ADDGRP {INDEX {1} DONE {true}}] \
+    [list $::C_OP $o(-op)] [list $::C_COMMIT $o(-commit)] [list $::C_ABORT {DONE {true}}] [list $::C_DP $o(-dp)] [list $::P_SYS {TYPE {2} SUB {0} MIN {} MAX {} UNIT {} LIST {} CH {65535} DONE {true}}] \
+    [list $::READ $::FOUND] [list $::DESCRIBE $::DESC1] [list $::LOGIC $::LOGICOUT]]
+  return [golden::call_raw $body [golden::prepare [list -candidate $::CAND -method PUT -contenttype application/json -setenv {REQUEST_URI /api/v2/programs} \
+    -header {X-Requested-With XMLHttpRequest} -header {X-Session-Id AbCdEf1234} -sessions $o(-sessions) -rega $rega]]]
+}
+proc callswith {r args} { set n 0; foreach c [dict get $r rega_calls] { set all 1; foreach a $args { if {[string first $a $c] < 0} { set all 0 } }; if {$all} { incr n } }; return $n }
+proc condops {r} { set n 0; foreach c [dict get $r rega_calls] { if {[string match {*var opName*} $c]} { incr n } }; return $n }
+proc condabort {r} { set n 0; foreach c [dict get $r rega_calls] { if {[string match {*progId.ToInteger()*} $c]} { incr n } }; return $n }
+set CBODY {{"id":"7","rule":0,"conditions":{"op":"or","groups":[{"from":0,"op":"and","conditions":[{"from":0,"kind":"device","datapointId":"3937","test":10,"value":"25","trigger":13},{"from":1,"kind":"time","trigger":15},{"kind":"sysvar","variableId":"950","test":1,"value":"false"}]},{"op":"or","conditions":[{"kind":"device","datapointId":"3937","test":8,"value":"5"}]}]}}}
+
+test programs-70 {the conditions of a rule are edited in place: the one that goes is deleted, the kept ones are updated, what is new is appended, the operators are set} -body {
+  set r [putcond $::CBODY]
+  set s [scripts $r]
+  list [status $r] [regexp {"rules":\[} [body $r]] \
+    [expr {[callswith $r {var opName = "delSingle";} {var grpIdx = "0";} {var sglIdx = "2";}] == 1}] [regexp {var opName = "timeTrigger";} $s] [regexp {var trigger = "15";} $s] \
+    [regexp {var opName = "setSingle";} $s] [regexp {var testCode = "10";} $s] [regexp {var rv1 = "25";} $s] [regexp {var opName = "addGroup";} $s] \
+    [regexp {var opName = "groupOp";} $s] [regexp {var opName = "innerOp";} $s]
+} -result {200 1 1 1 1 1 1 1 1 1 1}
+
+test programs-71 {a number typed as a percentage is handed over as a fraction; a logic value, a list index} -body {
+  set pct {TYPE {6} SUB {0} MIN {0.0} MAX {1.0} UNIT {100%} LIST {} CH {3935} DONE {true}}
+  set r [putcond {{"id":"7","rule":0,"conditions":{"groups":[{"from":0,"conditions":[{"from":0,"kind":"device","datapointId":"1013","test":8,"value":"50"}]}]}}} -dp $pct -counts {COUNTS {1} DONE {true}}]
+  list [status $r] [regexp {var rv1 = "0.500000";} [scripts $r]]
+} -result {200 1}
+
+test programs-72 {every bad condition is HTTP 422 naming the field, and nothing is touched on ReGa} -body {
+  set out {}
+  set G {{"from":0,"kind":"device","datapointId":"3937","test":10,"value":"25"}}
+  foreach {json field} [list \
+    "{\"id\":\"7\",\"rule\":0,\"conditions\":{\"groups\":\[{\"from\":5,\"conditions\":\[$G\]}\]}}" {conditions.groups[0].from} \
+    "{\"id\":\"7\",\"rule\":0,\"conditions\":{\"groups\":\[{\"from\":0,\"conditions\":\[$G\]},{\"from\":0,\"conditions\":\[$G\]}\]}}" {conditions.groups[1].from} \
+    {{"id":"7","rule":0,"conditions":{"groups":[{"from":0,"conditions":[{"kind":"time"}]}]}}} {conditions.groups[0].conditions[0].from} \
+    {{"id":"7","rule":0,"conditions":{"groups":[{"from":0,"conditions":[{"from":1,"kind":"device","datapointId":"3937","test":10,"value":"25"}]}]}}} {conditions.groups[0].conditions[0].from} \
+    {{"id":"7","rule":0,"conditions":{"groups":[{"from":0,"conditions":[{"from":0,"kind":"time"}]}]}}} {conditions.groups[0].conditions[0].from} \
+    {{"id":"7","rule":0,"conditions":{"groups":[{"conditions":[{"from":0,"kind":"device","datapointId":"3937","test":10,"value":"25"}]}]}}} {conditions.groups[0].conditions[0].from} \
+    {{"id":"7","rule":0,"conditions":{"groups":[{"from":0,"conditions":[]}]}}} {conditions.groups[0].conditions} \
+    {{"id":"7","rule":0,"conditions":{"groups":[{"from":0,"conditions":[{"kind":"device","datapointId":"3937","test":1,"value":"1"}]}]}}} {conditions.groups[0].conditions[0].test} \
+    {{"id":"7","rule":0,"conditions":{"groups":[{"from":0,"conditions":[{"kind":"device","datapointId":"3937","test":6,"value":"9","value2":"5"}]}]}}} {conditions.groups[0].conditions[0].value2} \
+    {{"id":"7","rule":0,"conditions":{"groups":[{"from":0,"conditions":[{"kind":"device","datapointId":"3937","test":8,"value":"x"}]}]}}} {conditions.groups[0].conditions[0].value} \
+    {{"id":"7","rule":0,"conditions":{"groups":[{"from":0,"conditions":[{"kind":"device","datapointId":"3937","test":8,"value":"1","trigger":7}]}]}}} {conditions.groups[0].conditions[0].trigger} \
+    {{"id":"7","rule":0,"conditions":{"groups":[{"from":0,"conditions":[{"kind":"device","datapointId":"3937","test":8,"value":"1","evil":1}]}]}}} {conditions.groups[0].conditions[0].evil} \
+    {{"id":"7","rule":0,"conditions":{"groups":[{"from":0,"conditions":[{"kind":"exec"}]}]}}} {conditions.groups[0].conditions[0].kind} \
+    {{"id":"7","rule":0,"conditions":{"op":"xor","groups":[]}}} {conditions.op} \
+    {{"id":"7","rule":0,"conditions":{"op":"and"}}} {conditions.groups} \
+    {{"id":"7","rule":0,"actions":[],"conditions":{"groups":[]}}} {actions} \
+    {{"id":"7","conditions":{"groups":[]}}} {rule}] {
+    set r [putcond $json]
+    set want [list 422 403 "invalid argument ($field)"]
+    if {[err $r] ne $want || [condops $r] != 0} { lappend out [list $json [err $r] [condops $r]] }
+  }
+  set out
+} -result {}
+
+test programs-73 {a list value must exist, and a comparison other than equals is for numbers only} -body {
+  set lst {TYPE {16} SUB {29} MIN {0} MAX {3} UNIT {} LIST {A;B;C} CH {3935} DONE {true}}
+  set a [putcond {{"id":"7","rule":0,"conditions":{"groups":[{"from":0,"conditions":[{"kind":"device","datapointId":"3941","test":1,"value":"3"}]}]}}} -dp $lst]
+  set b [putcond {{"id":"7","rule":0,"conditions":{"groups":[{"from":0,"conditions":[{"kind":"device","datapointId":"3941","test":8,"value":"1"}]}]}}} -dp $lst]
+  set c [putcond {{"id":"7","rule":0,"conditions":{"groups":[{"from":0,"conditions":[{"kind":"device","datapointId":"3941","test":1,"value":"2"}]}]}}} -dp $lst -counts {COUNTS {1} DONE {true}}]
+  list [lindex [err $a] 2] [lindex [err $b] 2] [status $c]
+} -result {{invalid argument (conditions.groups[0].conditions[0].value)} {invalid argument (conditions.groups[0].conditions[0].test)} 200}
+
+test programs-74 {only administrators edit conditions (a user and a guest are 403) and nothing runs on ReGa for them} -body {
+  set a [putcond $::CBODY -sessions $::USER]
+  set b [putcond $::CBODY -sessions $::GUEST]
+  list [status $a] [status $b] [condops $a][condops $b]
+} -result {403 403 00}
+
+test programs-75 {the else part has no conditions, and a rule that does not exist: HTTP 422 (rule), nothing is touched} -body {
+  set a [putcond $::CBODY -struct [join [list {RULE HASCOND {false}} {END DONE {true}}] "\r\n"]]
+  set b [putcond $::CBODY -struct {END DONE {true}}]
+  list [err $a] [err $b] [condops $a][condops $b]
+} -result {{422 403 {invalid argument (rule)}} {422 403 {invalid argument (rule)}} 00}
+
+test programs-76 {a failure on the way (an operation, the structure check, the commit) deletes the working copy: HTTP 502, never put back} -body {
+  set a [putcond $::CBODY -op {}]
+  set b [putcond $::CBODY -counts {COUNTS {1 1} DONE {true}}]
+  set c [putcond $::CBODY -commit {DONE {false}}]
+  list [err $a] [condabort $a] [err $b] [condabort $b] [err $c] [condabort $c]
+} -result [list {502 501 {the CCU did not take the change}} 1 {502 501 {the CCU did not take the change}} 1 {502 501 {the CCU did not take the change}} 1]
+
+test programs-77 {the scripts only ever delete a COPY and never name a variable that is not defined (ReGa rejects the whole script then)} -body {
+  set fd [open [file join $gen rega-model v2 programs.tcl] r]; set c [read $fd]; close $fd
+  regexp {proc programs_condOp \{.*?\n\}\n} $c helper
+  set vars {opName grpIdx sglIdx opCode trigger kindName targetId testCode valueKind rv1 rv2}
+  set missing {}
+  foreach v $vars { if {![regexp "\\m$v\\M" $helper]} { lappend missing $v } }
+  # every variable the operation script uses has a default
+  regexp {set op \{(.*?)\n  \}\n  set commit} $c -> opScript
+  set used {}
+  foreach m [regexp -all -inline {\m(opName|grpIdx|sglIdx|opCode|trigger|kindName|targetId|testCode|valueKind|rv1|rv2)\M} $opScript] { dict set used $m 1 }
+  list $missing [expr {[llength [dict keys $used]] <= [llength $vars]}] [regexp {c.ProgramCopyID\(\) != ID_ERROR\) && \(c.ID\(\) != p.ID\(\)\)} $c]
+} -result {{} 1 1}
+
+proc condtargets {mode} {
+  return [golden::call_raw {} [golden::prepare [list -candidate $::CAND -method GET -contenttype {} -setenv {REQUEST_URI /api/v2/programs} -query targets=$mode \
+    -header {X-Requested-With XMLHttpRequest} -header {X-Session-Id AbCdEf1234} -sessions $::ADMIN \
+    -rega [list [list {*HSSDP*} [list {ID 4481 NAME LEVEL CHANNEL {Rollo:1} DEVICE Rollo TYPE 6 SUB 0 MIN 0.0 MAX 1.0 UNIT 100% LIST {}}]] [list {*ID_SYSTEM_VARIABLES*} [list {ID 1233 NAME Alarmzone TYPE 2 SUB 6 MIN {} MAX {} UNIT {} LIST {} NAME0 aus NAME1 an}]]]]]]
+}
+
+test programs-78 {the targets of a condition are what can be read or reports (alarms are logic values), those of an action what can be written} -body {
+  set a [condtargets conditions]
+  set b [condtargets 1]
+  set sa [scripts $a]
+  set sb [scripts $b]
+  list [status $a] [regexp {OPERATION_READ \| OPERATION_EVENT} $sa] [regexp {OPERATION_WRITE} $sa] [regexp {ivtString} $sa] [regexp {istAlarm} $sa] \
+    [status $b] [regexp {OPERATION_WRITE & dp.Operations} $sb] [regexp {OPERATION_READ} $sb] [regexp {istAlarm} $sb]
+} -result {200 1 0 1 0 200 1 0 1}
 
 cleanupTests

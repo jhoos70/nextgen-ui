@@ -603,6 +603,43 @@ export function makeSaveProgramActions(doFetch: Fetch = defaultFetch): (sid: str
 const saveProgramActionsDefault = makeSaveProgramActions();
 export const saveProgramActions = (sid: string, id: string, rule: number, actions: ActionInput[], stopDelays?: boolean): Promise<ProgramLogic> => saveProgramActionsDefault(sid, id, rule, actions, stopDelays);
 
+/** GET /programs?targets=conditions: what a condition can look at (readable or reporting datapoints, variables incl. alarms). About 500 kB on a CCU with 160 devices. */
+export function makeGetConditionTargets(doFetch: Fetch = defaultFetch): (sid: string) => Promise<ProgramTargets> {
+  return async function getConditionTargets(sid: string): Promise<ProgramTargets> {
+    const { doc, status } = await send(doFetch, "/programs?targets=conditions", { method: "GET", headers: headersFor(sid) });
+    throwIfError(doc, status);
+    const d = doc as Partial<ProgramTargets> | null;
+    if (!d || !Array.isArray(d.datapoints) || !Array.isArray(d.variables)) throw new ApiError(0, "unexpected answer", status);
+    return { datapoints: d.datapoints, variables: d.variables };
+  };
+}
+const getConditionTargetsDefault = makeGetConditionTargets();
+export const getConditionTargets = (sid: string): Promise<ProgramTargets> => getConditionTargetsDefault(sid);
+
+/** A condition as the server takes it. "from" is its position in the program as it is now: what is not named there is deleted. */
+export type ConditionInput =
+  | { from?: number; kind: "device"; datapointId: string; test: number; value: string; value2?: string; trigger?: number }
+  | { from?: number; kind: "sysvar"; variableId: string; test: number; value: string; value2?: string; trigger?: number }
+  | { from: number; kind: "time"; trigger: number };
+
+export interface ConditionsInput {
+  op: "and" | "or";
+  groups: { from?: number; op: "and" | "or"; conditions: ConditionInput[] }[];
+}
+
+/** PUT /programs {id, rule, conditions}: EDITS the conditions of a rule in place; the answer is the program as it is now. */
+export function makeSaveProgramConditions(doFetch: Fetch = defaultFetch): (sid: string, id: string, rule: number, conditions: ConditionsInput) => Promise<ProgramLogic> {
+  return async function saveProgramConditions(sid: string, id: string, rule: number, conditions: ConditionsInput): Promise<ProgramLogic> {
+    const { doc, status } = await send(doFetch, "/programs", { method: "PUT", headers: headersFor(sid, true), body: JSON.stringify({ id, rule, conditions }) });
+    throwIfError(doc, status);
+    const d = doc as Partial<ProgramLogic> | null;
+    if (!d || typeof d.id !== "string" || !Array.isArray(d.rules)) throw new ApiError(0, "unexpected answer", status);
+    return { ...toManagedProgram(d, status), rules: d.rules };
+  };
+}
+const saveProgramConditionsDefault = makeSaveProgramConditions();
+export const saveProgramConditions = (sid: string, id: string, rule: number, conditions: ConditionsInput): Promise<ProgramLogic> => saveProgramConditionsDefault(sid, id, rule, conditions);
+
 export interface ProgramRun {
   id: string;
   executed: boolean;

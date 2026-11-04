@@ -103,7 +103,7 @@ def main():
             check("the actions have their delay, the script can be shown, the else part is listed", "Set Kinderzimmer:1 · MANU_MODE to 21" in txt and "after 3 min" in txt and "Run a script" in txt and "Else" in txt and "No actions." in txt)
             dlg.get_by_text("Show the script").click()
             check("the script is shown on request", dlg.get_by_text('WriteLine("x");').is_visible())
-            check("it says that the conditions cannot be changed yet", "The conditions cannot be changed here yet" in txt)
+            check("it says what can be edited", "Conditions and actions can be edited" in txt)
             dlg.get_by_role("button", name="OK").click(); dlg.wait_for(state="hidden")
             check("a program users may not operate is listed for the administrator, the system's own is not", pg.locator("tbody").get_by_text("Heizung", exact=True).count() == 1 and pg.locator("tbody").get_by_text("System", exact=True).count() == 0)
 

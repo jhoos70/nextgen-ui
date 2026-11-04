@@ -243,7 +243,19 @@ program and puts the copy back over the original in one step, as the classic edi
 The program list of targets comes from `GET /api/v2/programs?targets=1` (about 300 kB on a CCU with 160 devices, read when an editor
 opens). **An active program is put back as it was: the CCU checks its conditions again and the program can run at once**, so the
 editor says so first. An action the editor cannot show (a target that does not exist any more) makes the part read only here.
-Not built yet: the conditions, creating the *Else* part of a program, the weekly programs.
+Not built yet: creating the *Else* part of a program, the weekly programs.
+
+**Editing the conditions (administrators).** *Edit conditions* next to *If* / *Else if* opens the groups of the rule. The classic editor
+keeps ONE joiner between the groups and one inside each group, and so does this one (*and* / *or*). A condition is a device
+datapoint or a system variable (alarms count as logic values; a text variable is not offered), with a comparison that fits the target
+(*is* for a logic value, a list or a button; `=` `≠` `>` `≥` `<` `≤` and *between* for a number, a percentage typed 0 to 100), the
+value, and when it triggers (*on change*, *on update*, *only checked*; a button has no choice). The conditions are edited **in place**
+(`PUT /api/v2/programs {id, rule, conditions}`): each kept condition carries its position in the program, what is not named is deleted,
+what is new is appended after the kept ones (ReGa cannot insert or move), and a kept group never takes a condition from another one.
+**A time control cannot be made here.** An existing one is kept, may change how it triggers (*on update* / *only checked*), or goes;
+**removing one, or the group that holds it, deletes its timer** (ReGa empties the timer when its condition is deleted, so it cannot be
+rebuilt), which is why the editor asks first. Like the actions, the change is written on a working copy that is put back in one step;
+the list of what a condition can look at comes from `GET /api/v2/programs?targets=conditions` (about 500 kB, read when the editor opens).
 
 ## System variables: status and control
 
