@@ -1,15 +1,19 @@
 import * as React from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Button } from "@/components/ui/button";
+import { ProgramActionsDialog } from "@/components/ProgramActionsDialog";
 import { describeChangeError, getProgramLogic, isSessionExpired, type LogicRule, type Program } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { describeAction, describeCondition, describeDelay, VT_STRING } from "@/lib/program-logic";
 
 /** What a program does, read from the CCU and shown in words: its conditions and its actions, per rule. Read only. */
-export function ProgramLogicDialog({ program, sid, onClose, onExpired }: { program: Program; sid: string; onClose: () => void; onExpired: () => void }) {
+export function ProgramLogicDialog({ program, sid, onClose, onExpired, onChanged }: { program: Program; sid: string; onClose: () => void; onExpired: () => void; onChanged: () => void }) {
   const { t } = useI18n();
   const [rules, setRules] = React.useState<LogicRule[] | null>(null);
   const [error, setError] = React.useState("");
+  const [editing, setEditing] = React.useState<number | null>(null);
+  const [saved, setSaved] = React.useState(false);
+  const editOpener = React.useRef<HTMLElement | null>(null);
 
   React.useEffect(() => {
     let active = true;
@@ -40,6 +44,11 @@ export function ProgramLogicDialog({ program, sid, onClose, onExpired }: { progr
           <div className="space-y-4">
             <Dialog.Title className="text-lg font-semibold">{t("logicTitle", { name: program.name })}</Dialog.Title>
             <p className="text-xs text-[var(--muted-foreground)]">{t("logicReadOnly")}</p>
+            {saved && (
+              <p role="status" className="text-sm">
+                {t("actionSaved", { name: program.name })}
+              </p>
+            )}
             {error && (
               <p role="alert" className="text-sm text-[var(--destructive)]">
                 {error}
@@ -69,7 +78,21 @@ export function ProgramLogicDialog({ program, sid, onClose, onExpired }: { progr
                   </div>
                 )}
                 <div>
-                  <h3 className="font-semibold">{rule.hasCondition ? t("logicThen") : heading(rule, ri)}</h3>
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="font-semibold">{rule.hasCondition ? t("logicThen") : heading(rule, ri)}</h3>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-7 px-2 text-xs"
+                      aria-label={`${t("actionsEdit")}: ${rule.hasCondition ? t("logicThen") : heading(rule, ri)}`}
+                      onClick={(e) => {
+                        editOpener.current = e.currentTarget;
+                        setEditing(ri);
+                      }}
+                    >
+                      {t("actionsEdit")}
+                    </Button>
+                  </div>
                   {rule.actions.length === 0 ? (
                     <p className="text-[var(--muted-foreground)]">{t("logicNoActions")}</p>
                   ) : (
@@ -100,6 +123,29 @@ export function ProgramLogicDialog({ program, sid, onClose, onExpired }: { progr
           </div>
         </Dialog.Content>
       </Dialog.Portal>
+      {rules && editing !== null && rules[editing] && (
+        <ProgramActionsDialog
+          programId={program.id}
+          programName={program.name}
+          isActive={program.isActive}
+          rule={rules[editing]}
+          ruleIndex={editing}
+          part={rules[editing].hasCondition ? t("logicThen") : heading(rules[editing], editing)}
+          sid={sid}
+          onExpired={onExpired}
+          onClose={() => {
+            setEditing(null);
+            const back = editOpener.current;
+            window.setTimeout(() => back?.isConnected && back.focus(), 0);
+          }}
+          onSaved={(logic) => {
+            setRules(logic.rules);
+            setSaved(true);
+            setEditing(null);
+            onChanged();
+          }}
+        />
+      )}
     </Dialog.Root>
   );
 }

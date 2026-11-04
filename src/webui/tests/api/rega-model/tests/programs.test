@@ -100,7 +100,7 @@ test programs-7 {only GET, POST, PUT and DELETE are allowed (PATCH is 405 with t
 test programs-8 {the scripts (read, run, switch, describe, change, copy, delete) look the id up in the program collection and the id is a script variable, never code} -body {
   set fd [open [file join $gen rega-model v2 programs.tcl] r]; set c [read $fd]; close $fd
   list [regexp -all {foreach\(i, dom.GetObject\(ID_PROGRAMS\).EnumIDs\(\)\)} $c] [regexp {dom.GetObject\(\$} $c] [regexp -all {ProgramExecute\(\)} $c]
-} -result {8 0 1}
+} -result {9 0 1}
 
 proc modelprograms {extra} {
   set rec [concat {ID 1053 NAME Evening TIME {2026-10-12 21:00:00} ACTIVE true INTERNAL false} $extra]
@@ -274,7 +274,7 @@ set LOGICOUT [join [list \
   {TIME TT {9} SOT {0} SEC {23400} DUR {0} TIME {1970-01-01 07:30:00} BEGIN {2025-10-04 00:00:00} END {1970-01-01 01:00:00} REP {0}} \
   {COND G {1} GOP {2} S {0} SOP {1} LT {19} LV {950} CH {65535} CT {8} CT2 {4} RT1 {4} RV1 {20.000000} RT2 {4} RV2 {0.000000} LVN {Name \o mit \c Klammern} CHN {} VT {4/0} UNIT {°C} VN0 {} VN1 {} VL {}} \
   {DESTS BOR {true} COUNT {2}} \
-  {DEST P {18} VT {4} VPT {28} V {21.000000} VP {2026-11-04 00:03:00} CH {3935} DP {3943} CHN {Kinderzimmer:1} DPN {VirtualDevices.INT0000006:1.MANU_MODE} DPT {4/0}} \
+  {DEST P {18} VT {4} VPT {28} V {21.000000} VP {2026-11-04 00:03:00} CH {3935} DP {3943} CHN {Kinderzimmer:1} DPN {VirtualDevices.INT0000006:1.MANU_MODE} DPT {4/0} DPU {°C}} \
   {DEST P {20} VT {20} VPT {0} V {if (x) \o\nWrite("a\\b");\n\c} VP {} CH {65535} DP {65535} CHN {} DPN {} DPT {}} \
   {RULE IDX {1} HASCOND {false}} \
   {DESTS BOR {false} COUNT {0}} \
@@ -307,6 +307,11 @@ test programs-42 {the operators are and / or: the second group joins with the op
   list [regexp {"groups":\[\{"op":"or","conditions":\[\{"op":"and","kind":"device".*\},\{"op":"or","kind":"time"} $b] [regexp {\}\]\},\{"op":"or","conditions":\[\{"op":"and","kind":"sysvar"} $b]
 } -result {1 1}
 
+test programs-47 {the unit of the datapoint an action sets comes with the action (a destination from an older script has none)} -body {
+  set b [body [logic]]
+  list [regexp {"datapointName":"VirtualDevices.INT0000006:1.MANU_MODE","datapointType":"4\\/0","datapointUnit":"[^"]+"} $b] [regexp {"datapointType":"","datapointUnit":""\}\]\}} $b]
+} -result {1 1}
+
 test programs-43 {only an administrator reads the logic (a user and a guest are 403) and no program script runs for them} -body {
   set a [logic -sessions $::USER]
   set b [logic -sessions $::GUEST]
@@ -332,5 +337,123 @@ test programs-46 {the script is fixed text: the id is a variable and it only rea
   regexp {set PROGRAM_LOGIC_SCRIPT \{.*?\n\}\n\nproc programs_unescape} $c body
   list [regexp {i == progId} $body] [regexp {dom.GetObject\(\$} $body] [regexp {\.(Active|Name|PrgInfo|Visible|Remove|ProgramUpdate|DeleteObject|CreateObject|Destination[A-Za-z]*|OperatorType|ConditionType[0-9]*)\([^)]} $body]
 } -result {1 0 0}
+
+# ---- editing the actions of a rule (PUT {id, rule, actions}, administrators)
+set P_BEGIN   {*setStop*}
+set P_ADD     {*actKind*}
+set P_COMMIT  {*expectCount*}
+set P_ABORT   {*copyId*}
+set P_DEV     {*progTarget*HSSDP*}
+set P_SYS     {*progTarget*ID_SYSTEM_VARIABLES*}
+set TEMPDP    {TYPE {4} SUB {0} MIN {5.0} MAX {30.0} UNIT {°C} LIST {} OPS {2} CH {3935} DONE {true}}
+proc putact {body args} {
+  array set o [list -sessions $::ADMIN -begin {COPY {2002} CLEARED {true} DONE {true}} -add {ADDED {true} COUNT {1} DONE {true}} -commit {DONE {true}} -dp $::TEMPDP -sv {TYPE {16} SUB {0} MIN {0} MAX {65000} UNIT {} LIST {} OPS {2} CH {65535} DONE {true}}]
+  array set o $args
+  set rega [list [list $::P_BEGIN $o(-begin)] [list $::P_ADD $o(-add)] [list $::P_COMMIT $o(-commit)] [list $::P_ABORT {DONE {true}}] \
+    [list $::P_DEV $o(-dp)] [list $::P_SYS $o(-sv)] [list $::READ $::FOUND] [list $::DESCRIBE $::DESC1] [list $::LOGIC $::LOGICOUT]]
+  return [golden::call_raw $body [golden::prepare [list -candidate $::CAND -method PUT -contenttype application/json -setenv {REQUEST_URI /api/v2/programs} \
+    -header {X-Requested-With XMLHttpRequest} -header {X-Session-Id AbCdEf1234} -sessions $o(-sessions) -rega $rega]]]
+}
+proc writes {r} { set n 0; foreach c [dict get $r rega_calls] { if {[string match {*setStop*} $c] || [string match {*actKind*} $c] || [string match {*expectCount*} $c]} { incr n } }; return $n }
+proc aborted {r} { set n 0; foreach c [dict get $r rega_calls] { if {[string match {*copyId*} $c] && ![string match {*expectCount*} $c] && ![string match {*actKind*} $c]} { incr n } }; return $n }
+
+test programs-50 {the actions of a rule are replaced: validated first, written on a working copy, put back; the answer is the program} -body {
+  set r [putact {{"id":"7","rule":0,"stopDelays":false,"actions":[{"kind":"device","datapointId":"3943","value":"19.5"},{"kind":"device","datapointId":"3943","value":"21","delaySeconds":90},{"kind":"sysvar","variableId":"12202","value":"1"},{"kind":"script","script":"if (x) {\n}","delaySeconds":3725}]}}]
+  set s [scripts $r]
+  list [status $r] [regexp {^\{"id":"7".*"rules":\[\{"hasCondition":true} [body $r]] \
+    [regexp -all {var actKind = "device";} $s] [regexp {var actValue = "19.500000";} $s] [regexp {var valueKind = "FLOAT";} $s] \
+    [regexp {var actDelay = "00:01:30";} $s] [regexp {var actDelay = "01:02:05";} $s] [regexp {var actKind = "sysvar";} $s] [regexp {var actKind = "script";} $s] \
+    [regexp {var stopValue = "false";} $s] [regexp {var expectCount = "4";} $s]
+} -result {200 1 2 1 1 1 1 1 1 1 1}
+
+test programs-51 {a percentage is typed as 0..100 and handed to ReGa as 0..1; 101 is refused} -body {
+  set pct {TYPE {6} SUB {0} MIN {0.0} MAX {1.0} UNIT {100%} LIST {} OPS {2} CH {3935} DONE {true}}
+  set a [putact {{"id":"7","rule":0,"actions":[{"kind":"device","datapointId":"1013","value":"50"}]}} -dp $pct]
+  set b [putact {{"id":"7","rule":0,"actions":[{"kind":"device","datapointId":"1013","value":"101"}]}} -dp $pct]
+  list [status $a] [regexp {var actValue = "0.500000";} [scripts $a]] [err $b] [writes $b]
+} -result {200 1 {422 403 {invalid argument (actions[0].value)}} 0}
+
+test programs-52 {every bad action is HTTP 422 naming the field, and nothing is written} -body {
+  set out {}
+  foreach {json field} [list \
+    {{"id":"7","rule":0,"actions":[{"kind":"device","datapointId":"3943","value":"99"}]}} {actions[0].value} \
+    {{"id":"7","rule":0,"actions":[{"kind":"device","datapointId":"3943","value":"warm"}]}} {actions[0].value} \
+    {{"id":"7","rule":0,"actions":[{"kind":"device","datapointId":"x","value":"1"}]}} {actions[0].datapointId} \
+    {{"id":"7","rule":0,"actions":[{"kind":"device","value":"1"}]}} {actions[0].datapointId} \
+    {{"id":"7","rule":0,"actions":[{"kind":"device","datapointId":"3943"}]}} {actions[0].value} \
+    {{"id":"7","rule":0,"actions":[{"kind":"sysvar","datapointId":"12202","value":"1"}]}} {actions[0].variableId} \
+    {{"id":"7","rule":0,"actions":[{"kind":"exec","script":"x"}]}} {actions[0].kind} \
+    {{"id":"7","rule":0,"actions":[{"script":"x"}]}} {actions[0].kind} \
+    {{"id":"7","rule":0,"actions":[{"kind":"script","script":"x","evil":1}]}} {actions[0].evil} \
+    {{"id":"7","rule":0,"actions":[{"kind":"script","script":"x","delaySeconds":400000}]}} {actions[0].delaySeconds} \
+    {{"id":"7","rule":0,"actions":[{"kind":"script","script":"x","delaySeconds":-1}]}} {actions[0].delaySeconds} \
+    {{"id":"7","rule":0,"actions":[{"kind":"script","script":"x"},{"kind":"script","script":"a\u0001b"}]}} {actions[1].script} \
+    {{"id":"7","rule":0}} {actions} \
+    {{"id":"7","rule":"x","actions":[]}} {rule} \
+    {{"id":"7","rule":0,"actions":[],"stopDelays":"yes"}} {stopDelays} \
+    {{"id":"7","rule":0,"name":"x","actions":[]}} {name}] {
+    set r [putact $json]
+    set want [list 422 403 "invalid argument ($field)"]
+    if {[err $r] ne $want || [writes $r] != 0} { lappend out [list $json [err $r] [writes $r]] }
+  }
+  set out
+} -result {}
+
+test programs-53 {only administrators edit actions (a user and a guest are 403) and no script runs for them} -body {
+  set a [putact {{"id":"7","rule":0,"actions":[]}} -sessions $::USER]
+  set b [putact {{"id":"7","rule":0,"actions":[]}} -sessions $::GUEST]
+  list [status $a] [status $b] [writes $a][writes $b]
+} -result {403 403 00}
+
+test programs-54 {a failure while adding deletes the working copy and the answer is HTTP 502: the program is never put back} -body {
+  set r [putact {{"id":"7","rule":0,"actions":[{"kind":"script","script":"x"},{"kind":"script","script":"y"}]}} -add {}]
+  set s [scripts $r]
+  list [err $r] [expr {[regexp -all {var actKind} $s] >= 1}] [regexp {expectCount} $s] [aborted $r]
+} -result {{502 501 {the CCU did not take the change}} 1 0 1}
+
+test programs-55 {a commit that does not report DONE true deletes the working copy too} -body {
+  set r [putact {{"id":"7","rule":0,"actions":[{"kind":"script","script":"x"}]}} -commit {DONE {false}}]
+  list [err $r] [aborted $r]
+} -result {{502 501 {the CCU did not take the change}} 1}
+
+test programs-56 {a rule that cannot be cleared (or does not exist) stops before anything is added} -body {
+  set r [putact {{"id":"7","rule":5,"actions":[{"kind":"script","script":"x"}]}} -begin {DONE {false}}]
+  set s [scripts $r]
+  list [err $r] [regexp {actKind} $s] [regexp {expectCount} $s]
+} -result {{502 501 {the CCU did not take the change}} 0 0}
+
+test programs-57 {the sensitive scripts only ever delete a COPY: the abort and the commit check that the object is a copy of this program} -body {
+  set fd [open [file join $gen rega-model v2 programs.tcl] r]; set c [read $fd]; close $fd
+  regexp {set commit \{.*?\n  \}\n  set abort \{(.*?)\n  \}\n} $c -> abort
+  regexp {set commit \{(.*?)\n  \}\n  set abort} $c -> commit
+  list [regexp {c.ProgramCopyID\(\) != ID_ERROR} $abort] [regexp {c.ID\(\) != progId.ToInteger\(\)} $abort] [regexp {c.ProgramCopyID\(\) != ID_ERROR\) && \(c.ID\(\) != p.ID\(\)\)} $commit] [regexp {dom.GetObject\(\$} $c]
+} -result {1 1 1 0}
+
+# ---- what an action can set
+proc targets {args} {
+  array set o [list -sessions $::ADMIN]
+  array set o $args
+  set dps [join [list {{} ID {4481}} {} ] ""]
+  return [golden::call_raw {} [golden::prepare [list -candidate $::CAND -method GET -contenttype {} -setenv {REQUEST_URI /api/v2/programs} -query targets=1 \
+    -header {X-Requested-With XMLHttpRequest} -header {X-Session-Id AbCdEf1234} -sessions $o(-sessions) \
+    -rega [list \
+      [list {*HSSDP*OPERATION_WRITE*} [list {ID 4481 NAME BOOST_MODE CHANNEL {Heizung:1} DEVICE Heizung TYPE 2 SUB 28 MIN 5.0 MAX 30.0 UNIT {} LIST {}} {ID 1013 NAME LEVEL CHANNEL {Rollo:1} DEVICE Rollo TYPE 6 SUB 0 MIN 0.0 MAX 1.0 UNIT 100% LIST {}}]] \
+      [list {*ID_SYSTEM_VARIABLES*istAlarm*} [list {ID 12202 NAME Rollladenautomatik TYPE 16 SUB 0 MIN 0 MAX 65000 UNIT {} LIST {} NAME0 {} NAME1 {}}]]]]]]
+}
+
+test programs-60 {the targets of an action: writable datapoints and variables, with type, range, unit and list} -body {
+  set r [targets]
+  set b [body $r]
+  list [status $r] [regexp {^\{"datapoints":\[\{"id":"4481","param":"BOOST_MODE","channel":"Heizung:1","device":"Heizung","valueType":2,"subType":28,} $b] \
+    [regexp {"id":"1013","param":"LEVEL".*"valueType":6,"subType":0,"min":"0.0","max":"1.0","unit":"100%"} $b] \
+    [regexp {"variables":\[\{"id":"12202","name":"Rollladenautomatik","valueType":16,"subType":0} $b]
+} -result {200 1 1 1}
+
+test programs-61 {the targets are for administrators only, and the scripts leave out what must not be set: internal objects, alarms} -body {
+  set a [targets -sessions $::USER]
+  set fd [open [file join $gen rega-model v2 programs.tcl] r]; set c [read $fd]; close $fd
+  regexp {proc programs_targets \{ \} \{.*?\n\}\n} $c body
+  list [status $a] [regexp {OPERATION_WRITE & dp.Operations\(\)} $body] [regexp {istAlarm} $body] [regexp {sv.Internal\(\)} $body] [regexp {dp.Internal\(\)} $body]
+} -result {403 1 1 1 1}
 
 cleanupTests

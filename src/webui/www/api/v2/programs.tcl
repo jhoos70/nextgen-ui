@@ -19,12 +19,24 @@
 #   PUT    {"id","name"?,"description"?,"isVisible"?,"isOperable"?}   changes the given fields; the answer holds all four as
 #                             ReGa has them afterwards. "isOperable" is the full access of users who are not administrators.
 #   DELETE ?id=<id>                                deletes a program; the system's own (internal or unerasable) are refused.
+#   GET    ?targets=1                              what an action can set: {"datapoints":[...writable ones with their type, range, unit
+#                             and list],"variables":[...]} (administrators)
 #   GET    ?id=<id>                                the logic of a program, decoded: its rules (if / else if / else), the condition
 #                             groups of each with the single conditions (a device datapoint, a system variable or a time module)
 #                             and the actions (set a datapoint, set a system variable, run a script) with their delay. READ ONLY.
 #                             {"id","name",...,"rules":[{"hasCondition","groups":[{"op","conditions":[...]}],"stopDelays","actions":[...]}]}
 #                             The numbers are ReGa's own codes (see the client, program-logic.ts); free text (names, scripts) is
 #                             escaped by the ReGa script (\\ \o \c \n) so that braces and line breaks cannot break the answer.
+#   PUT    {"id","rule":<index>,"actions":[...],"stopDelays"?}   REPLACES the actions of one rule (0 = the first rule: "then", 1 =
+#                             the "else" part when there is one). An action is {"kind":"device","datapointId","value","delaySeconds"?},
+#                             {"kind":"sysvar","variableId","value","delaySeconds"?} or {"kind":"script","script","delaySeconds"?}.
+#                             Every target and value is validated BEFORE anything is written (the datapoint must be writable, the
+#                             value must fit its type and range: a percentage is sent as 0..100 and kept by ReGa as 0..1; HTTP 422
+#                             names the offending field, "actions[2].value"). The change is made on a working copy of the program
+#                             and copied back over the original in one step, as the classic editor does (RestoreProgram), so a
+#                             failure leaves the program as it was; name, description, flags and the active state are kept. NOTE:
+#                             putting the program back re-activates it as it was: for an ACTIVE program the CCU checks its
+#                             conditions again and it can run at once. The answer is the program as GET gives it.
 # A name is 1..100 characters without control characters and must not belong to any other ReGa object (HTTP 409, error 404
 # "name already in use"); a description is up to 1000 characters. The conditions and actions of a program are not
 # editable here. Every create, copy, change and delete is one line in the syslog.
@@ -313,6 +325,332 @@ proc programs_delete { id } {
   return [string is true -strict $r(DELETED)]
 }
 
+set PROGRAM_ACTIONS_MAX 50
+set PROGRAM_SCRIPT_MAX 32000
+set PROGRAM_DELAY_MAX 359999
+
+##
+# What a datapoint of a device channel or a system variable is: its value type, range, list and unit, and whether it can be
+# set. The id is the variable progTarget; kind is "device" or "sysvar". "" = not a valid target.
+##
+proc programs_targetInfo { kind id } {
+  if { "device" eq $kind } then {
+    set script {
+      var dp = dom.GetObject(progTarget);
+      if (dp)
+      {
+        if (dp.TypeName() == "HSSDP")
+        {
+          var ch = dom.GetObject(dp.Channel());
+          if (ch)
+          {
+            if (!ch.Internal())
+            {
+              Write("TYPE {" # dp.ValueType() # "} SUB {" # dp.ValueSubType() # "} MIN {" # dp.ValueMin() # "} MAX {" # dp.ValueMax() # "} UNIT {" # dp.ValueUnit() # "} LIST {" # dp.ValueList() # "} OPS {" # dp.Operations() # "} CH {" # dp.Channel() # "} DONE {true}");
+            }
+          }
+        }
+      }
+    }
+  } else {
+    set script {
+      string i;
+      foreach(i, dom.GetObject(ID_SYSTEM_VARIABLES).EnumIDs())
+      {
+        if (i == progTarget)
+        {
+          var sv = dom.GetObject(i);
+          if (sv)
+          {
+            boolean takeSv = false;
+            if (sv.Visible()) { if (false == sv.Internal()) { if (sv.ValueSubType() != istAlarm) { takeSv = true; } } }
+            if (takeSv)
+            {
+              Write("TYPE {" # sv.ValueType() # "} SUB {" # sv.ValueSubType() # "} MIN {" # sv.ValueMin() # "} MAX {" # sv.ValueMax() # "} UNIT {" # sv.ValueUnit() # "} LIST {" # sv.ValueList() # "} OPS {2} CH {65535} DONE {true}");
+            }
+          }
+        }
+      }
+    }
+  }
+  array set a [list progTarget $id]
+  array set t {}
+  catch { array set t [hmscript $script a] }
+  if { ![info exists t(DONE)] } then { return "" }
+  if { "device" eq $kind && 0 == ($t(OPS) & 2) } then { return "" }
+  return [array get t]
+}
+
+##
+# The value to hand to ReGa (as a string) and its kind (BOOL, FLOAT, INT, STRING) for a target, or "" when the value does not fit.
+##
+proc programs_actionValue { info value } {
+  array set t $info
+  set vt $t(TYPE)
+  set sub $t(SUB)
+  switch -- $vt {
+    2 {
+      if { "true" eq $value || ("false" eq $value && 28 != $sub) } then { return [list BOOL $value] }
+    }
+    16 {
+      if { 29 == $sub } then {
+        set n [llength [split $t(LIST) ";"]]
+        if { [regexp {^[0-9]{1,4}$} $value] && [scan $value %d i] == 1 && $i < $n } then { return [list INT $i] }
+      } elseif { [regexp {^-?[0-9]{1,9}$} $value] } then {
+        scan $value %d i
+        if { ![string is double -strict $t(MIN)] || ($i >= $t(MIN) && $i <= $t(MAX)) } then { return [list INT $i] }
+      }
+    }
+    4 - 5 - 6 {
+      if { [regexp {^-?[0-9]{1,15}(\.[0-9]{1,6})?$} $value] } then {
+        set f [expr { double($value) }]
+        if { "100%" eq $t(UNIT) } then { set f [expr { $f / 100.0 }] }
+        if { ![string is double -strict $t(MIN)] || ![string is double -strict $t(MAX)] || ($f >= $t(MIN) - 1e-9 && $f <= $t(MAX) + 1e-9) } then { return [list FLOAT [format %.6f $f]] }
+      }
+    }
+    20 {
+      global SYSVAR_STRING_MAX
+      if { [string length $value] <= 1000 && ![regexp {[\u0000-\u001f\u007f]} $value] } then { return [list STRING $value] }
+    }
+  }
+  return ""
+}
+
+proc programs_delayParam { seconds } {
+  return [format "%02d:%02d:%02d" [expr { $seconds / 3600 }] [expr { ($seconds % 3600) / 60 }] [expr { $seconds % 60 }]]
+}
+
+##
+# Validates the actions of a request; answers HTTP 422 with the name of the field. Returns the list of plan entries:
+# {kind K target ID valueKind VK value V delay D script S}
+##
+proc programs_planActions { actions } {
+  global PROGRAM_ACTIONS_MAX PROGRAM_SCRIPT_MAX PROGRAM_DELAY_MAX
+  if { [llength $actions] > $PROGRAM_ACTIONS_MAX } then { jsonrpc_error 403 "invalid argument (actions)" }
+  set plan {}
+  set n 0
+  foreach a $actions {
+    set f "actions\[$n\]"
+    if { [catch { array set x $a }] } then { jsonrpc_error 403 "invalid argument ($f)" }
+    foreach key [array names x] {
+      if { $key ni {kind datapointId variableId value script delaySeconds} } then { jsonrpc_error 403 "invalid argument ($f.[regsub -all {[^A-Za-z0-9_.-]} [string range $key 0 39] _])" }
+    }
+    if { ![info exists x(kind)] || $x(kind) ni {device sysvar script} } then { jsonrpc_error 403 "invalid argument ($f.kind)" }
+    set delay 0
+    if { [info exists x(delaySeconds)] } then {
+      if { ![regexp {^[0-9]{1,6}$} $x(delaySeconds)] || [scan $x(delaySeconds) %d delay] != 1 || $delay > $PROGRAM_DELAY_MAX } then { jsonrpc_error 403 "invalid argument ($f.delaySeconds)" }
+    }
+    set entry [list kind $x(kind) target "" valueKind STRING value "" delay $delay]
+    if { "script" eq $x(kind) } then {
+      if { ![info exists x(script)] || [string length $x(script)] > $PROGRAM_SCRIPT_MAX || [regexp {[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]} $x(script)] } then { jsonrpc_error 403 "invalid argument ($f.script)" }
+      dict set entry value $x(script)
+    } else {
+      set idKey [expr { "device" eq $x(kind) ? "datapointId" : "variableId" }]
+      if { ![info exists x($idKey)] || ![regexp {^[0-9]{1,10}$} $x($idKey)] } then { jsonrpc_error 403 "invalid argument ($f.$idKey)" }
+      if { ![info exists x(value)] } then { jsonrpc_error 403 "invalid argument ($f.value)" }
+      set info [programs_targetInfo $x(kind) $x($idKey)]
+      if { "" == $info } then { jsonrpc_error 403 "invalid argument ($f.$idKey)" }
+      set v [programs_actionValue $info $x(value)]
+      if { "" == $v } then { jsonrpc_error 403 "invalid argument ($f.value)" }
+      dict set entry target $x($idKey)
+      dict set entry valueKind [lindex $v 0]
+      dict set entry value [lindex $v 1]
+    }
+    lappend plan $entry
+    array unset x
+    incr n
+  }
+  return $plan
+}
+
+##
+# Writes the plan: a working copy of the program gets the actions of the rule and is put back over the original in one step;
+# any failure deletes the copy and leaves the original as it was. Returns 1 when the program holds the new actions.
+##
+proc programs_applyActions { id rule plan stopDelays } {
+  set begin {
+    string i;
+    foreach(i, dom.GetObject(ID_PROGRAMS).EnumIDs())
+    {
+      if (i == progId)
+      {
+        var p = dom.GetObject(i);
+        if (p)
+        {
+          var c = p.ProgramCopyTo();
+          if (c)
+          {
+            integer k = 0;
+            integer want = ruleIdx.ToInteger();
+            object r = c.Rule();
+            boolean found = false;
+            while (r)
+            {
+              if (k == want)
+              {
+                found = true;
+                object d = r.RuleDestination();
+                integer guard = 0;
+                while ((d.DestSingleCount() > 0) && (guard < 1000))
+                {
+                  object f = d.DestSingleDestination(0);
+                  d.DestDelSingle(f.ID());
+                  guard = guard + 1;
+                }
+                if (setStop == "true") { if (stopValue == "true") { d.BreakOnRestart(true); } else { d.BreakOnRestart(false); } }
+                Write("COPY {" # c.ID() # "} CLEARED {" # (d.DestSingleCount() == 0) # "} DONE {true}");
+              }
+              r = r.RuleSubRule();
+              k = k + 1;
+            }
+            if (!found)
+            {
+              if (c.ProgramCopyID() != ID_ERROR) { dom.DeleteObject(c.ID()); }
+              Write("DONE {false}");
+            }
+          }
+        }
+      }
+    }
+  }
+  set add {
+    var c = dom.GetObject(copyId);
+    if (c)
+    {
+      integer k = 0;
+      integer want = ruleIdx.ToInteger();
+      object r = c.Rule();
+      while (r)
+      {
+        if (k == want)
+        {
+          object d = r.RuleDestination();
+          object s = d.DestAddSingle();
+          if (s)
+          {
+            boolean ok = true;
+            if (actKind == "script")
+            {
+              s.DestinationParam(ivtString);
+              s.DestinationValueType(ivtString);
+              s.DestinationValue(actValue);
+            }
+            else
+            {
+              object tgt = dom.GetObject(actTarget);
+              if (tgt)
+              {
+                if (actKind == "device")
+                {
+                  s.DestinationParam(ivtObjectId);
+                  s.DestinationChannel(tgt.Channel());
+                }
+                else
+                {
+                  s.DestinationParam(ivtSystemId);
+                }
+                s.DestinationDP(tgt.ID());
+                s.DestinationValueType(tgt.ValueType());
+                if (valueKind == "BOOL") { if (actValue == "true") { s.DestinationValue(true); } else { s.DestinationValue(false); } }
+                if (valueKind == "FLOAT") { real fv = actValue.ToFloat(); s.DestinationValue(fv); }
+                if (valueKind == "INT") { integer iv = actValue.ToInteger(); s.DestinationValue(iv); }
+                if (valueKind == "STRING") { s.DestinationValue(actValue); }
+              }
+              else { ok = false; }
+            }
+            if (ok)
+            {
+              if (actDelay != "")
+              {
+                s.DestinationValueParamType(ivtDelay);
+                s.DestinationValueParam(actDelay);
+              }
+              Write("ADDED {true} COUNT {" # d.DestSingleCount() # "} DONE {true}");
+            }
+          }
+        }
+        r = r.RuleSubRule();
+        k = k + 1;
+      }
+    }
+  }
+  set commit {
+    var c = dom.GetObject(copyId);
+    var p = dom.GetObject(progId);
+    boolean ok = false;
+    if (c)
+    {
+      if (p)
+      {
+        if ((c.ProgramCopyID() != ID_ERROR) && (c.ID() != p.ID()))
+        {
+          integer k = 0;
+          integer want = ruleIdx.ToInteger();
+          object r = c.Rule();
+          while (r)
+          {
+            if (k == want) { if (r.RuleDestination().DestSingleCount() == expectCount.ToInteger()) { ok = true; } }
+            r = r.RuleSubRule();
+            k = k + 1;
+          }
+          if (ok)
+          {
+            boolean wasActive = p.Active();
+            c.ProgramCopyTo(p.ID());
+            dom.DeleteObject(c.ID());
+            p.ProgramCopyID(ID_ERROR);
+            p.ProgramUpdate();
+            p.Active(wasActive);
+          }
+          else { dom.DeleteObject(c.ID()); }
+        }
+      }
+    }
+    Write("DONE {" # ok # "}");
+  }
+  set abort {
+    var c = dom.GetObject(copyId);
+    if (c)
+    {
+      if (c.IsTypeOf(OT_PROGRAM))
+      {
+        if ((c.ProgramCopyID() != ID_ERROR) && (c.ID() != progId.ToInteger())) { dom.DeleteObject(c.ID()); }
+      }
+    }
+    Write("DONE {true}");
+  }
+
+  array set a [list progId $id ruleIdx $rule setStop [expr { "" == $stopDelays ? "false" : "true" }] stopValue $stopDelays]
+  array set b {}
+  catch { array set b [hmscript $begin a] }
+  if { ![info exists b(COPY)] || ![string is true -strict $b(CLEARED)] } then { return 0 }
+  set copy $b(COPY)
+  foreach entry $plan {
+    array set e $entry
+    set delay [expr { $e(delay) > 0 ? [programs_delayParam $e(delay)] : "" }]
+    array set ad [list copyId $copy ruleIdx $rule actKind $e(kind) actTarget $e(target) valueKind $e(valueKind) actValue $e(value) actDelay $delay]
+    array set r {}
+    catch { array set r [hmscript $add ad] }
+    array unset ad
+    array unset e
+    if { ![info exists r(ADDED)] } then {
+      array set ab [list copyId $copy progId $id]
+      catch { hmscript $abort ab }
+      return 0
+    }
+    array unset r
+  }
+  array set cm [list copyId $copy progId $id ruleIdx $rule expectCount [llength $plan]]
+  array set done {}
+  catch { array set done [hmscript $commit cm] }
+  if { ![info exists done(DONE)] || ![string is true -strict $done(DONE)] } then {
+    array set ab [list copyId $copy progId $id]
+    catch { hmscript $abort ab }
+    return 0
+  }
+  return 1
+}
+
 proc programs_parseBody { allowed } {
   set text [v2_body]
   if { [catch { array set body [json_parseObject text] } cause] } then {
@@ -322,6 +660,28 @@ proc programs_parseBody { allowed } {
     if { $key ni $allowed } then { jsonrpc_error 403 "invalid argument ([regsub -all {[^A-Za-z0-9_.-]} [string range $key 0 39] _])" }
   }
   return [array get body]
+}
+
+proc programs_putActions { uid bodyList } {
+  array set body $bodyList
+  foreach k {name description isVisible isOperable} { if { [info exists body($k)] } then { jsonrpc_error 403 "invalid argument ($k)" } }
+  if { ![info exists body(rule)] || ![regexp {^[0-9]{1,2}$} $body(rule)] } then { jsonrpc_error 403 "invalid argument (rule)" }
+  if { ![info exists body(actions)] || ![regexp {"actions"\s*:\s*\[} [v2_body]] } then { jsonrpc_error 403 "invalid argument (actions)" }
+  set stop ""
+  if { [info exists body(stopDelays)] } then {
+    if { $body(stopDelays) ne "true" && $body(stopDelays) ne "false" } then { jsonrpc_error 403 "invalid argument (stopDelays)" }
+    set stop $body(stopDelays)
+  }
+  set plan [programs_planActions $body(actions)]
+  set id $body(id)
+  programs_requireManageable $id
+  if { ![programs_applyActions $id $body(rule) $plan $stop] } then { programs_failed PUT "change the actions of program $id" }
+  api_syslog daemon.notice "cid=[api_cid] method=PUT /api/v2/programs uid=$uid action=change the actions of program $id rule $body(rule): [llength $plan] action(s)"
+  set d [programs_describe $id]
+  set rules [programs_logic $id]
+  if { "" == $d || "" == $rules } then { programs_failed PUT "read program $id after the change" }
+  set base [programs_json $id $d]
+  v2_respondJson "[string range $base 0 end-1],\"rules\":$rules\}"
 }
 
 proc programs_manage { verb } {
@@ -339,8 +699,12 @@ proc programs_manage { verb } {
   }
 
   if { "PUT" eq $verb } then {
-    array set body [programs_parseBody {id name description isVisible isOperable}]
+    array set body [programs_parseBody {id name description isVisible isOperable rule actions stopDelays}]
     if { ![info exists body(id)] || ![regexp {^[0-9]{1,10}$} $body(id)] } then { jsonrpc_error 403 "invalid argument (id)" }
+    if { [info exists body(actions)] || [info exists body(rule)] || [info exists body(stopDelays)] } then {
+      programs_putActions $uid [array get body]
+      return
+    }
     set fields {}
     if { [info exists body(name)] } then { programs_checkName $body(name); lappend fields name $body(name) }
     if { [info exists body(description)] } then { programs_checkInfo $body(description); lappend fields description $body(description) }
@@ -467,14 +831,15 @@ set PROGRAM_LOGIC_SCRIPT {
                 {
                   object dch = dom.GetObject(sd.DestinationChannel());
                   object ddp = dom.GetObject(sd.DestinationDP());
-                  string dchn = ""; string ddpn = ""; string dvt = ""; string dv = "" # sd.DestinationValue(); string dvp = "" # sd.DestinationValueParam();
+                  string dchn = ""; string ddpn = ""; string dvt = ""; string ddu = ""; string dv = "" # sd.DestinationValue(); string dvp = "" # sd.DestinationValueParam();
                   if (dch) { dchn = dch.Name(); }
-                  if (ddp) { ddpn = ddp.Name(); dvt = ddp.ValueType() # "/" # ddp.ValueSubType(); }
+                  if (ddp) { ddpn = ddp.Name(); dvt = ddp.ValueType() # "/" # ddp.ValueSubType(); ddu = ddp.ValueUnit(); }
                   dchn = dchn.Replace("\\", "\\\\"); dchn = dchn.Replace("{", "\\o"); dchn = dchn.Replace("}", "\\c"); dchn = dchn.Replace("\r", ""); dchn = dchn.Replace("\n", "\\n");
                   ddpn = ddpn.Replace("\\", "\\\\"); ddpn = ddpn.Replace("{", "\\o"); ddpn = ddpn.Replace("}", "\\c"); ddpn = ddpn.Replace("\r", ""); ddpn = ddpn.Replace("\n", "\\n");
                   dv = dv.Replace("\\", "\\\\"); dv = dv.Replace("{", "\\o"); dv = dv.Replace("}", "\\c"); dv = dv.Replace("\r", ""); dv = dv.Replace("\n", "\\n");
+                  ddu = ddu.Replace("\\", "\\\\"); ddu = ddu.Replace("{", "\\o"); ddu = ddu.Replace("}", "\\c"); ddu = ddu.Replace("\r", ""); ddu = ddu.Replace("\n", "\\n");
                   dvp = dvp.Replace("\\", "\\\\"); dvp = dvp.Replace("{", "\\o"); dvp = dvp.Replace("}", "\\c"); dvp = dvp.Replace("\r", ""); dvp = dvp.Replace("\n", "\\n");
-                  WriteLine("DEST P {" # sd.DestinationParam() # "} VT {" # sd.DestinationValueType() # "} VPT {" # sd.DestinationValueParamType() # "} V {" # dv # "} VP {" # dvp # "} CH {" # sd.DestinationChannel() # "} DP {" # sd.DestinationDP() # "} CHN {" # dchn # "} DPN {" # ddpn # "} DPT {" # dvt # "}");
+                  WriteLine("DEST P {" # sd.DestinationParam() # "} VT {" # sd.DestinationValueType() # "} VPT {" # sd.DestinationValueParamType() # "} V {" # dv # "} VP {" # dvp # "} CH {" # sd.DestinationChannel() # "} DP {" # sd.DestinationDP() # "} CHN {" # dchn # "} DPN {" # ddpn # "} DPT {" # dvt # "} DPU {" # ddu # "}");
                 }
               }
             }
@@ -553,9 +918,11 @@ proc programs_logic { id } {
         dict set rule stopDelays [programs_bool $f(BOR)]
       }
       DEST {
-        foreach k {V VP CHN DPN DPT} { set f($k) [programs_unescape $f($k)] }
+        # a line from an older script has no unit
+        if { ![info exists f(DPU)] } then { set f(DPU) "" }
+        foreach k {V VP CHN DPN DPT DPU} { set f($k) [programs_unescape $f($k)] }
         set acts [dict get $rule actions]
-        lappend acts [list param [programs_num $f(P)] valueType [programs_num $f(VT)] delayType [programs_num $f(VPT)] value $f(V) delay $f(VP) channelId $f(CH) datapointId $f(DP) channelName $f(CHN) datapointName $f(DPN) datapointType $f(DPT)]
+        lappend acts [list param [programs_num $f(P)] valueType [programs_num $f(VT)] delayType [programs_num $f(VPT)] value $f(V) delay $f(VP) channelId $f(CH) datapointId $f(DP) channelName $f(CHN) datapointName $f(DPN) datapointType $f(DPT) datapointUnit $f(DPU)]
         dict set rule actions $acts
       }
       END { set done 1 }
@@ -602,13 +969,108 @@ proc programs_condJson { c } {
 
 proc programs_actJson { a } {
   set j "\{\"param\":[dict get $a param],\"valueType\":[dict get $a valueType],\"delayType\":[dict get $a delayType]"
-  foreach k {value delay channelId datapointId channelName datapointName datapointType} { append j ",\"$k\":[json_toString [dict get $a $k]]" }
+  foreach k {value delay channelId datapointId channelName datapointName datapointType datapointUnit} { append j ",\"$k\":[json_toString [dict get $a $k]]" }
   return "$j\}"
+}
+
+##
+# The things an action can set: every writable datapoint of a device channel and every system variable that users may set. One
+# bulk script (never one per device); the answer is {"datapoints":[...],"variables":[...]}.
+##
+proc programs_targets { } {
+  set dpScript {
+    string dId;
+    string cId;
+    string pId;
+    foreach(dId, root.Devices().EnumIDs())
+    {
+      var dev = dom.GetObject(dId);
+      if (dev)
+      {
+        foreach(cId, dev.Channels())
+        {
+          var channel = dom.GetObject(cId);
+          boolean takeCh = false;
+          if (channel) { if (false == channel.Internal()) { takeCh = true; } }
+          if (takeCh)
+          {
+            foreach(pId, channel.DPs())
+            {
+              var dp = dom.GetObject(pId);
+              boolean takeDp = false;
+              if (dp) { if (dp.TypeName() == "HSSDP") { if (!dp.Internal()) { if (OPERATION_WRITE & dp.Operations()) { takeDp = true; } } } }
+              if (takeDp)
+              {
+                WriteLine("{");
+                WriteLine("ID {" # dp.ID() # "}");
+                WriteLine("NAME {" # dp.HSSID() # "}");
+                WriteLine("CHANNEL {" # channel.Name() # "}");
+                WriteLine("DEVICE {" # dev.Name() # "}");
+                WriteLine("TYPE {" # dp.ValueType() # "}");
+                WriteLine("SUB {" # dp.ValueSubType() # "}");
+                WriteLine("MIN {" # dp.ValueMin() # "}");
+                WriteLine("MAX {" # dp.ValueMax() # "}");
+                WriteLine("UNIT {" # dp.ValueUnit() # "}");
+                WriteLine("LIST {" # dp.ValueList() # "}");
+                WriteLine("}");
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  set svScript {
+    string i;
+    foreach(i, dom.GetObject(ID_SYSTEM_VARIABLES).EnumIDs())
+    {
+      var sv = dom.GetObject(i);
+      if (sv)
+      {
+        boolean takeSv = false;
+        if (sv.Visible()) { if (false == sv.Internal()) { if (sv.ValueSubType() != istAlarm) { takeSv = true; } } }
+        if (takeSv)
+        {
+          WriteLine("{");
+          WriteLine("ID {" # sv.ID() # "}");
+          WriteLine("NAME {" # sv.Name() # "}");
+          WriteLine("TYPE {" # sv.ValueType() # "}");
+          WriteLine("SUB {" # sv.ValueSubType() # "}");
+          WriteLine("MIN {" # sv.ValueMin() # "}");
+          WriteLine("MAX {" # sv.ValueMax() # "}");
+          WriteLine("UNIT {" # sv.ValueUnit() # "}");
+          WriteLine("LIST {" # sv.ValueList() # "}");
+          WriteLine("NAME0 {" # sv.ValueName0() # "}");
+          WriteLine("NAME1 {" # sv.ValueName1() # "}");
+          WriteLine("}");
+        }
+      }
+    }
+  }
+  set dps {}
+  foreach rec [v2_records [hmscript $dpScript]] {
+    if { [catch { array set p $rec }] || ![info exists p(ID)] } then { array unset p; continue }
+    foreach k {NAME CHANNEL DEVICE TYPE SUB MIN MAX UNIT LIST} { if { ![info exists p($k)] } then { set p($k) "" } }
+    lappend dps "\{\"id\":[json_toString $p(ID)],\"param\":[json_toString $p(NAME)],\"channel\":[json_toString $p(CHANNEL)],\"device\":[json_toString $p(DEVICE)],\"valueType\":[programs_num $p(TYPE)],\"subType\":[programs_num $p(SUB)],\"min\":[json_toString $p(MIN)],\"max\":[json_toString $p(MAX)],\"unit\":[json_toString $p(UNIT)],\"valueList\":[json_toString $p(LIST)]\}"
+    array unset p
+  }
+  set svs {}
+  foreach rec [v2_records [hmscript $svScript]] {
+    if { [catch { array set p $rec }] || ![info exists p(ID)] } then { array unset p; continue }
+    foreach k {NAME TYPE SUB MIN MAX UNIT LIST NAME0 NAME1} { if { ![info exists p($k)] } then { set p($k) "" } }
+    lappend svs "\{\"id\":[json_toString $p(ID)],\"name\":[json_toString $p(NAME)],\"valueType\":[programs_num $p(TYPE)],\"subType\":[programs_num $p(SUB)],\"min\":[json_toString $p(MIN)],\"max\":[json_toString $p(MAX)],\"unit\":[json_toString $p(UNIT)],\"valueList\":[json_toString $p(LIST)],\"valueName0\":[json_toString $p(NAME0)],\"valueName1\":[json_toString $p(NAME1)]\}"
+    array unset p
+  }
+  return "\{\"datapoints\":\[[join $dps ,]\],\"variables\":\[[join $svs ,]\]\}"
 }
 
 proc programs_detail { } {
   global V2_QUERY
   v2_requireLevel ADMIN
+  if { "targets=1" eq $V2_QUERY } then {
+    v2_respondJson [programs_targets]
+    return
+  }
   if { ![regexp {^id=([0-9]{1,10})$} $V2_QUERY -> id] } then { jsonrpc_error 403 "invalid argument (id)" }
   programs_requireManageable $id
   set d [programs_describe $id]

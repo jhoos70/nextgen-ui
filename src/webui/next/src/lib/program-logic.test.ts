@@ -27,7 +27,7 @@ const cond = (o: Partial<LogicCondition>): LogicCondition => ({
   right2: "0",
   ...o,
 });
-const act = (o: Partial<LogicAction>): LogicAction => ({ param: 18, valueType: 4, delayType: 0, value: "21.000000", delay: "", channelId: "2", datapointId: "3", channelName: "Kinderzimmer:1", datapointName: "VirtualDevices.INT0000006:1.MANU_MODE", datapointType: "4/0", ...o });
+const act = (o: Partial<LogicAction>): LogicAction => ({ param: 18, valueType: 4, delayType: 0, value: "21.000000", delay: "", channelId: "2", datapointId: "3", channelName: "Kinderzimmer:1", datapointName: "VirtualDevices.INT0000006:1.MANU_MODE", datapointType: "4/0", datapointUnit: "", ...o });
 
 describe("small helpers", () => {
   it("shortens a datapoint name and trims numbers", () => {
@@ -118,5 +118,12 @@ describe("getProgramLogic", () => {
   });
   it("refuses an answer without rules", async () => {
     await expect(makeGetProgramLogic(async () => new Response('{"id":"7","name":"P","isVisible":true,"isOperable":true}'))("x", "7")).rejects.toBeInstanceOf(Error);
+  });
+});
+
+describe("scaling values", () => {
+  it("shows a scaling datapoint that ReGa keeps as 0..1 as a percentage", () => {
+    expect(describeAction(act({ valueType: 6, value: "0.500000", datapointName: "BidCos-RF.BidCoS-RF:1.LEVEL", datapointUnit: "100%" }), t)).toBe("Set Kinderzimmer:1 · LEVEL to 50 %");
+    expect(describeAction(act({ valueType: 6, value: "0.005000", datapointUnit: "100%" }), t)).toContain("to 0.5 %");
   });
 });

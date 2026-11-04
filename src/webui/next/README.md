@@ -232,6 +232,19 @@ on request, and the delay). It is the first stage of the program editor: it prov
 every program of the restored copy (54 of 54 read, 46 device, 19 system variable and 10 time conditions; the actions are 74
 scripts, 23 device values, 1 system variable). Anything the formatter does not know says so and points to the classic interface.
 
+**Editing the actions (administrators).** In the Logic dialog every part (*Then*, *Else*) has an **Edit actions** button. The editor
+shows one row per action: a kind (*Device value*, *System variable*, *Script*), a target you pick from a filterable list of what can
+be set, a value input that fits the target (a switch, a list, a number with its range and unit, a text, or just *Trigger* for a button),
+an optional delay (seconds, minutes or hours), and a script as a text area. Rows can be moved up and down and removed; a new row starts
+with a value that is valid. **OK** stays off until something changed and every row is valid, and a percentage is typed as 0 to 100
+(ReGa keeps 0 to 1). Saving sends the WHOLE list for that part (`PUT /api/v2/programs {id, rule, actions, stopDelays}`); the server
+validates every target and value first (HTTP 422 names the field, e.g. `actions[2].value`), writes the actions on a working copy of the
+program and puts the copy back over the original in one step, as the classic editor does, so a failure leaves the program as it was.
+The program list of targets comes from `GET /api/v2/programs?targets=1` (about 300 kB on a CCU with 160 devices, read when an editor
+opens). **An active program is put back as it was: the CCU checks its conditions again and the program can run at once**, so the
+editor says so first. An action the editor cannot show (a target that does not exist any more) makes the part read only here.
+Not built yet: the conditions, creating the *Else* part of a program, the weekly programs.
+
 ## System variables: status and control
 
 The first page that **writes**. The list is the classic one: name, description, last modified and status, with a name

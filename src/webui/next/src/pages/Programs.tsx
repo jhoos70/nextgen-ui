@@ -277,6 +277,7 @@ export default function Programs({ sid, onExpired }: { sid: string; onExpired: (
           program={viewing}
           sid={sid}
           onExpired={onExpired}
+          onChanged={refresh}
           onClose={() => {
             setViewing(null);
             restoreFocus();

@@ -140,6 +140,7 @@ export function describeAction(a: LogicAction, t: Translate): string {
   let value = a.value;
   if (a.valueType === VT_BINARY) value = a.value === "true" || a.value === "1" ? t("logicOn") : t("logicOff");
   else if (a.valueType === VT_FLOAT || a.valueType === VT_INTEGER) value = trimNumber(a.value);
+  else if (a.valueType === 5 || a.valueType === 6) value = a.datapointUnit === "100%" ? `${trimNumber(String(Math.round(Number(a.value) * 10000) / 100))} %` : trimNumber(a.value);
   return t("logicSet", { target, value });
 }
 

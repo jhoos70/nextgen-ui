@@ -510,6 +510,7 @@ export interface LogicAction {
   channelName: string;
   datapointName: string;
   datapointType: string;
+  datapointUnit: string; // "100%" for a scaling datapoint that ReGa keeps as 0..1
 }
 
 export interface LogicRule {
@@ -535,6 +536,72 @@ export function makeGetProgramLogic(doFetch: Fetch = defaultFetch): (sid: string
 }
 const getProgramLogicDefault = makeGetProgramLogic();
 export const getProgramLogic = (sid: string, id: string): Promise<ProgramLogic> => getProgramLogicDefault(sid, id);
+
+/** A datapoint an action can set (writable, of a device channel). */
+export interface TargetDatapoint {
+  id: string;
+  param: string; // MANU_MODE
+  channel: string;
+  device: string;
+  valueType: number; // ReGa: 2 logic, 4 float, 5/6 scaling, 16 integer, 20 string
+  subType: number; // 28 a button, 29 a list
+  min: string;
+  max: string;
+  unit: string;
+  valueList: string;
+}
+
+/** A system variable an action can set. */
+export interface TargetVariable {
+  id: string;
+  name: string;
+  valueType: number;
+  subType: number;
+  min: string;
+  max: string;
+  unit: string;
+  valueList: string;
+  valueName0: string;
+  valueName1: string;
+}
+
+export interface ProgramTargets {
+  datapoints: TargetDatapoint[];
+  variables: TargetVariable[];
+}
+
+/** GET /programs?targets=1: what an action can set (administrators). About 300 kB on a CCU with 160 devices: read when an editor opens. */
+export function makeGetProgramTargets(doFetch: Fetch = defaultFetch): (sid: string) => Promise<ProgramTargets> {
+  return async function getProgramTargets(sid: string): Promise<ProgramTargets> {
+    const { doc, status } = await send(doFetch, "/programs?targets=1", { method: "GET", headers: headersFor(sid) });
+    throwIfError(doc, status);
+    const d = doc as Partial<ProgramTargets> | null;
+    if (!d || !Array.isArray(d.datapoints) || !Array.isArray(d.variables)) throw new ApiError(0, "unexpected answer", status);
+    return { datapoints: d.datapoints, variables: d.variables };
+  };
+}
+const getProgramTargetsDefault = makeGetProgramTargets();
+export const getProgramTargets = (sid: string): Promise<ProgramTargets> => getProgramTargetsDefault(sid);
+
+/** An action as the server takes it (a percentage as 0..100, a delay in seconds). */
+export type ActionInput =
+  | { kind: "device"; datapointId: string; value: string; delaySeconds?: number }
+  | { kind: "sysvar"; variableId: string; value: string; delaySeconds?: number }
+  | { kind: "script"; script: string; delaySeconds?: number };
+
+/** PUT /programs {id, rule, actions, stopDelays}: REPLACES the actions of one rule; the answer is the program as it is now. */
+export function makeSaveProgramActions(doFetch: Fetch = defaultFetch): (sid: string, id: string, rule: number, actions: ActionInput[], stopDelays?: boolean) => Promise<ProgramLogic> {
+  return async function saveProgramActions(sid: string, id: string, rule: number, actions: ActionInput[], stopDelays?: boolean): Promise<ProgramLogic> {
+    const body = { id, rule, actions, ...(stopDelays === undefined ? {} : { stopDelays }) };
+    const { doc, status } = await send(doFetch, "/programs", { method: "PUT", headers: headersFor(sid, true), body: JSON.stringify(body) });
+    throwIfError(doc, status);
+    const d = doc as Partial<ProgramLogic> | null;
+    if (!d || typeof d.id !== "string" || !Array.isArray(d.rules)) throw new ApiError(0, "unexpected answer", status);
+    return { ...toManagedProgram(d, status), rules: d.rules };
+  };
+}
+const saveProgramActionsDefault = makeSaveProgramActions();
+export const saveProgramActions = (sid: string, id: string, rule: number, actions: ActionInput[], stopDelays?: boolean): Promise<ProgramLogic> => saveProgramActionsDefault(sid, id, rule, actions, stopDelays);
 
 export interface ProgramRun {
   id: string;
