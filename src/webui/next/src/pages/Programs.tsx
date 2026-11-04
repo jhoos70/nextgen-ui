@@ -1,7 +1,9 @@
 import * as React from "react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ProgramDialog, type ProgramDialogMode } from "@/components/ProgramDialog";
+import { ProgramLogicDialog } from "@/components/ProgramLogicDialog";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -126,14 +128,11 @@ export default function Programs({ sid, onExpired }: { sid: string; onExpired: (
   // managing (administrators): the dialog to create, edit or copy, and the program being deleted
   const [dialog, setDialog] = React.useState<ProgramDialogMode | null>(null);
   const [deleting, setDeleting] = React.useState<Program | null>(null);
+  const [viewing, setViewing] = React.useState<Program | null>(null);
   const dialogOpener = React.useRef<HTMLElement | null>(null);
   const restoreFocus = () => {
     const back = dialogOpener.current;
     window.setTimeout(() => back?.isConnected && back.focus(), 0);
-  };
-  const openDialog = (mode: ProgramDialogMode, opener: HTMLElement) => {
-    dialogOpener.current = opener;
-    setDialog(mode);
   };
 
   async function remove(p: Program): Promise<string | null> {
@@ -167,7 +166,10 @@ export default function Programs({ sid, onExpired }: { sid: string; onExpired: (
       {/* The result of a run: announced to a screen reader, shown to everybody */}
       {maySwitch && (
         <div>
-          <Button variant="outline" onClick={(e) => openDialog({ kind: "create" }, e.currentTarget)}>
+          <Button variant="outline" onClick={(e) => {
+              dialogOpener.current = e.currentTarget;
+              setDialog({ kind: "create" });
+            }}>
             {t("newProgram")}
           </Button>
         </div>
@@ -230,26 +232,22 @@ export default function Programs({ sid, onExpired }: { sid: string; onExpired: (
                 )}
                 {maySwitch && (
                   <TableCell className="whitespace-nowrap text-right">
-                    <div className="flex justify-end gap-1">
-                      <Button variant="outline" className="h-8 px-3" disabled={running !== null} onClick={(e) => openDialog({ kind: "edit", program: p }, e.currentTarget)} aria-label={`${t("editProgram")}: ${text(p.name, strings)}`}>
-                        {t("editProgram")}
-                      </Button>
-                      <Button variant="outline" className="h-8 px-3" disabled={running !== null} onClick={(e) => openDialog({ kind: "copy", program: p, name: t("programCopyName", { name: p.name }).slice(0, 100) }, e.currentTarget)} aria-label={`${t("copyProgram")}: ${text(p.name, strings)}`}>
-                        {t("copyProgram")}
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        className="h-8 px-3"
-                        disabled={running !== null}
-                        onClick={(e) => {
-                          dialogOpener.current = e.currentTarget;
-                          setDeleting(p);
-                        }}
-                        aria-label={`${t("delete")}: ${text(p.name, strings)}`}
-                      >
-                        {t("delete")}
-                      </Button>
-                    </div>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" className="h-8 px-3" disabled={running !== null} onClick={(e) => (dialogOpener.current = e.currentTarget)} aria-label={`${t("manage")}: ${text(p.name, strings)}`}>
+                          {t("manage")}
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent className="w-44">
+                        <DropdownMenuItem onSelect={() => setViewing(p)}>{t("logicShow")}</DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => setDialog({ kind: "edit", program: p })}>{t("editProgram")}</DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => setDialog({ kind: "copy", program: p, name: t("programCopyName", { name: p.name }).slice(0, 100) })}>{t("copyProgram")}</DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem className="text-[var(--destructive)]" onSelect={() => setDeleting(p)}>
+                          {t("delete")}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </TableCell>
                 )}
               </TableRow>
@@ -271,6 +269,17 @@ export default function Programs({ sid, onExpired }: { sid: string; onExpired: (
             setDialog(null);
             restoreFocus();
             refresh();
+          }}
+        />
+      )}
+      {viewing && (
+        <ProgramLogicDialog
+          program={viewing}
+          sid={sid}
+          onExpired={onExpired}
+          onClose={() => {
+            setViewing(null);
+            restoreFocus();
           }}
         />
       )}

@@ -19,6 +19,12 @@
 #   PUT    {"id","name"?,"description"?,"isVisible"?,"isOperable"?}   changes the given fields; the answer holds all four as
 #                             ReGa has them afterwards. "isOperable" is the full access of users who are not administrators.
 #   DELETE ?id=<id>                                deletes a program; the system's own (internal or unerasable) are refused.
+#   GET    ?id=<id>                                the logic of a program, decoded: its rules (if / else if / else), the condition
+#                             groups of each with the single conditions (a device datapoint, a system variable or a time module)
+#                             and the actions (set a datapoint, set a system variable, run a script) with their delay. READ ONLY.
+#                             {"id","name",...,"rules":[{"hasCondition","groups":[{"op","conditions":[...]}],"stopDelays","actions":[...]}]}
+#                             The numbers are ReGa's own codes (see the client, program-logic.ts); free text (names, scripts) is
+#                             escaped by the ReGa script (\\ \o \c \n) so that braces and line breaks cannot break the answer.
 # A name is 1..100 characters without control characters and must not belong to any other ReGa object (HTTP 409, error 404
 # "name already in use"); a description is up to 1000 characters. The conditions and actions of a program are not
 # editable here. Every create, copy, change and delete is one line in the syslog.
@@ -384,9 +390,240 @@ proc programs_manage { verb } {
   v2_respondJson [programs_json $id $d]
 }
 
+##
+# The fixed script that reads the logic of a program: one line per rule, condition, time module, destinations and
+# destination. The id is the variable progId. Free text is escaped (backslash, braces, line breaks) so that every line is a
+# well formed Tcl list whatever a name or a script holds.
+##
+set PROGRAM_LOGIC_SCRIPT {
+  string i;
+  foreach(i, dom.GetObject(ID_PROGRAMS).EnumIDs())
+  {
+    if (i == progId)
+    {
+      object p = dom.GetObject(i);
+      if (p)
+      {
+        object r = p.Rule();
+        integer ri = 0;
+        while (r)
+        {
+          WriteLine("RULE IDX {" # ri # "} HASCOND {" # r.ElseIfFlag() # "}");
+          integer nc = r.RuleConditions().Count();
+          if (nc > 0)
+          {
+            string ci;
+            foreach (ci, system.GenerateEnum(0, nc - 1))
+            {
+              object c = r.RuleCondition(ci);
+              if (c)
+              {
+                integer ns = c.CndSingleCount();
+                if (ns > 0)
+                {
+                  string si;
+                  foreach (si, system.GenerateEnum(0, ns - 1))
+                  {
+                    object s = c.CndSingleCondition(si);
+                    if (s)
+                    {
+                      object lv = dom.GetObject(s.LeftVal());
+                      object ch = dom.GetObject(s.ConditionChannel());
+                      string lvn = ""; string chn = ""; string vt = ""; string un = ""; string v0 = ""; string v1 = ""; string vl = ""; string rv1 = "" # s.RightVal1(); string rv2 = "" # s.RightVal2();
+                      if (lv) { lvn = lv.Name(); vt = lv.ValueType() # "/" # lv.ValueSubType(); un = lv.ValueUnit(); v0 = lv.ValueName0(); v1 = lv.ValueName1(); vl = lv.ValueList(); }
+                      if (ch) { chn = ch.Name(); }
+                      lvn = lvn.Replace("\\", "\\\\"); lvn = lvn.Replace("{", "\\o"); lvn = lvn.Replace("}", "\\c"); lvn = lvn.Replace("\r", ""); lvn = lvn.Replace("\n", "\\n");
+                      chn = chn.Replace("\\", "\\\\"); chn = chn.Replace("{", "\\o"); chn = chn.Replace("}", "\\c"); chn = chn.Replace("\r", ""); chn = chn.Replace("\n", "\\n");
+                      un = un.Replace("\\", "\\\\"); un = un.Replace("{", "\\o"); un = un.Replace("}", "\\c"); un = un.Replace("\r", ""); un = un.Replace("\n", "\\n");
+                      v0 = v0.Replace("\\", "\\\\"); v0 = v0.Replace("{", "\\o"); v0 = v0.Replace("}", "\\c"); v0 = v0.Replace("\r", ""); v0 = v0.Replace("\n", "\\n");
+                      v1 = v1.Replace("\\", "\\\\"); v1 = v1.Replace("{", "\\o"); v1 = v1.Replace("}", "\\c"); v1 = v1.Replace("\r", ""); v1 = v1.Replace("\n", "\\n");
+                      vl = vl.Replace("\\", "\\\\"); vl = vl.Replace("{", "\\o"); vl = vl.Replace("}", "\\c"); vl = vl.Replace("\r", ""); vl = vl.Replace("\n", "\\n");
+                      rv1 = rv1.Replace("\\", "\\\\"); rv1 = rv1.Replace("{", "\\o"); rv1 = rv1.Replace("}", "\\c"); rv1 = rv1.Replace("\r", ""); rv1 = rv1.Replace("\n", "\\n");
+                      rv2 = rv2.Replace("\\", "\\\\"); rv2 = rv2.Replace("{", "\\o"); rv2 = rv2.Replace("}", "\\c"); rv2 = rv2.Replace("\r", ""); rv2 = rv2.Replace("\n", "\\n");
+                      WriteLine("COND G {" # ci # "} GOP {" # c.CndOperatorType() # "} S {" # si # "} SOP {" # s.OperatorType() # "} LT {" # s.LeftValType() # "} LV {" # s.LeftVal() # "} CH {" # s.ConditionChannel() # "} CT {" # s.ConditionType() # "} CT2 {" # s.ConditionType2() # "} RT1 {" # s.RightVal1ValType() # "} RV1 {" # rv1 # "} RT2 {" # s.RightVal2ValType() # "} RV2 {" # rv2 # "} LVN {" # lvn # "} CHN {" # chn # "} VT {" # vt # "} UNIT {" # un # "} VN0 {" # v0 # "} VN1 {" # v1 # "} VL {" # vl # "}");
+                      if (s.LeftValType() == ivtCurrentDate)
+                      {
+                        object tm = dom.GetObject(s.RightVal1());
+                        if (tm) { WriteLine("TIME TT {" # tm.TimerType() # "} SOT {" # tm.SunOffsetType() # "} SEC {" # tm.TimeSeconds() # "} DUR {" # tm.CalDuration() # "} TIME {" # tm.Time() # "} BEGIN {" # tm.Begin() # "} END {" # tm.End() # "} REP {" # tm.CalRepetitionCount() # "}"); }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          object d = r.RuleDestination();
+          if (d)
+          {
+            integer nd = d.DestSingleCount();
+            WriteLine("DESTS BOR {" # d.BreakOnRestart() # "} COUNT {" # nd # "}");
+            if (nd > 0)
+            {
+              string di;
+              foreach (di, system.GenerateEnum(0, nd - 1))
+              {
+                object sd = d.DestSingleDestination(di);
+                if (sd)
+                {
+                  object dch = dom.GetObject(sd.DestinationChannel());
+                  object ddp = dom.GetObject(sd.DestinationDP());
+                  string dchn = ""; string ddpn = ""; string dvt = ""; string dv = "" # sd.DestinationValue(); string dvp = "" # sd.DestinationValueParam();
+                  if (dch) { dchn = dch.Name(); }
+                  if (ddp) { ddpn = ddp.Name(); dvt = ddp.ValueType() # "/" # ddp.ValueSubType(); }
+                  dchn = dchn.Replace("\\", "\\\\"); dchn = dchn.Replace("{", "\\o"); dchn = dchn.Replace("}", "\\c"); dchn = dchn.Replace("\r", ""); dchn = dchn.Replace("\n", "\\n");
+                  ddpn = ddpn.Replace("\\", "\\\\"); ddpn = ddpn.Replace("{", "\\o"); ddpn = ddpn.Replace("}", "\\c"); ddpn = ddpn.Replace("\r", ""); ddpn = ddpn.Replace("\n", "\\n");
+                  dv = dv.Replace("\\", "\\\\"); dv = dv.Replace("{", "\\o"); dv = dv.Replace("}", "\\c"); dv = dv.Replace("\r", ""); dv = dv.Replace("\n", "\\n");
+                  dvp = dvp.Replace("\\", "\\\\"); dvp = dvp.Replace("{", "\\o"); dvp = dvp.Replace("}", "\\c"); dvp = dvp.Replace("\r", ""); dvp = dvp.Replace("\n", "\\n");
+                  WriteLine("DEST P {" # sd.DestinationParam() # "} VT {" # sd.DestinationValueType() # "} VPT {" # sd.DestinationValueParamType() # "} V {" # dv # "} VP {" # dvp # "} CH {" # sd.DestinationChannel() # "} DP {" # sd.DestinationDP() # "} CHN {" # dchn # "} DPN {" # ddpn # "} DPT {" # dvt # "}");
+                }
+              }
+            }
+          }
+          r = r.RuleSubRule();
+          ri = ri + 1;
+        }
+        WriteLine("END DONE {true}");
+      }
+    }
+  }
+}
+
+proc programs_unescape { s } {
+  return [string map [list "\\\\" "\\" "\\o" "\{" "\\c" "\}" "\\n" "\n"] $s]
+}
+
+proc programs_num { v } {
+  if { [regexp {^-?[0-9]{1,12}$} $v] } then { return $v }
+  return 0
+}
+
+proc programs_bool { v } { return [expr { [string is true -strict $v] ? "true" : "false" }] }
+
+##
+# The logic of a program as JSON (see the header). "" = ReGa did not answer.
+##
+proc programs_logic { id } {
+  global PROGRAM_LOGIC_SCRIPT
+  array set a [list progId $id]
+  set out ""
+  if { [catch { set out [hmscript $PROGRAM_LOGIC_SCRIPT a] }] } then { return "" }
+  set rules {}
+  set rule {}
+  set groups {}
+  set group {}
+  set groupId ""
+  set groupOp 0
+  set done 0
+  set haveRule 0
+  foreach line [split $out "\n"] {
+    set line [string trim $line]
+    if { "" == $line || [catch { llength $line }] } then { continue }
+    set tag [lindex $line 0]
+    array unset f
+    if { [catch { array set f [lrange $line 1 end] }] } then { continue }
+    switch -- $tag {
+      RULE {
+        if { $haveRule } then { lappend rules [programs_closeRule $rule $groups $group $groupOp] }
+        set haveRule 1
+        set rule [list hasCondition [programs_bool $f(HASCOND)] stopDelays false actions {}]
+        set groups {}
+        set group {}
+        set groupId ""
+      }
+      COND {
+        if { $groupId ne "" && $groupId ne $f(G) } then { lappend groups [list op $groupOp conditions $group]; set group {} }
+        set groupId $f(G)
+        set groupOp $f(GOP)
+        set kind unknown
+        if { 18 == $f(LT) } then { set kind device } elseif { 19 == $f(LT) } then { set kind sysvar } elseif { 24 == $f(LT) } then { set kind time }
+        foreach k {VT UNIT VN0 VN1 VL LVN CHN RV1 RV2} { set f($k) [programs_unescape $f($k)] }
+        # the left value of a time condition is a timestamp, not an object
+        set lv $f(LV)
+        if { "time" eq $kind } then { set lv "" }
+        lappend group [list op $f(SOP) kind $kind objectId $lv objectName $f(LVN) channelId $f(CH) channelName $f(CHN) \
+          valueType $f(VT) unit $f(UNIT) valueName0 $f(VN0) valueName1 $f(VN1) valueList $f(VL) \
+          test [programs_num $f(CT)] trigger [programs_num $f(CT2)] rightType [programs_num $f(RT1)] right $f(RV1) right2Type [programs_num $f(RT2)] right2 $f(RV2) time {}]
+      }
+      TIME {
+        set last [lindex $group end]
+        set last [lreplace $last end end [list timerType [programs_num $f(TT)] sunOffset [programs_num $f(SOT)] seconds [programs_num $f(SEC)] duration [programs_num $f(DUR)] time $f(TIME) begin $f(BEGIN) end $f(END) repetitions [programs_num $f(REP)]]]
+        set group [lreplace $group end end $last]
+      }
+      DESTS {
+        dict set rule stopDelays [programs_bool $f(BOR)]
+      }
+      DEST {
+        foreach k {V VP CHN DPN DPT} { set f($k) [programs_unescape $f($k)] }
+        set acts [dict get $rule actions]
+        lappend acts [list param [programs_num $f(P)] valueType [programs_num $f(VT)] delayType [programs_num $f(VPT)] value $f(V) delay $f(VP) channelId $f(CH) datapointId $f(DP) channelName $f(CHN) datapointName $f(DPN) datapointType $f(DPT)]
+        dict set rule actions $acts
+      }
+      END { set done 1 }
+    }
+  }
+  if { !$done } then { return "" }
+  if { $haveRule } then { lappend rules [programs_closeRule $rule $groups $group $groupOp] }
+  return "\[[join $rules ,]\]"
+}
+
+proc programs_closeRule { rule groups group groupOp } {
+  if { [llength $group] } then { lappend groups [list op $groupOp conditions $group] }
+  set g {}
+  foreach grp $groups {
+    set cs {}
+    foreach c [dict get $grp conditions] { lappend cs [programs_condJson $c] }
+    lappend g "\{\"op\":[json_toString [programs_opName [dict get $grp op]]],\"conditions\":\[[join $cs ,]\]\}"
+  }
+  set acts {}
+  foreach a [dict get $rule actions] { lappend acts [programs_actJson $a] }
+  return "\{\"hasCondition\":[dict get $rule hasCondition],\"groups\":\[[join $g ,]\],\"stopDelays\":[dict get $rule stopDelays],\"actions\":\[[join $acts ,]\]\}"
+}
+
+proc programs_opName { code } { return [expr { 1 == $code ? "and" : "or" }] }
+
+proc programs_condJson { c } {
+  set j "\{\"op\":[json_toString [programs_opName [dict get $c op]]],\"kind\":[json_toString [dict get $c kind]]"
+  foreach {k key} {objectId objectId channelId channelId} { append j ",\"$k\":[json_toString [dict get $c $key]]" }
+  foreach k {objectName channelName valueType unit valueName0 valueName1 valueList right right2} { append j ",\"$k\":[json_toString [dict get $c $k]]" }
+  foreach k {test trigger rightType right2Type} { append j ",\"$k\":[dict get $c $k]" }
+  if { [llength [dict get $c time]] } then {
+    set t [dict get $c time]
+    append j ",\"time\":\{"
+    set first 1
+    foreach {k v} $t {
+      if { !$first } then { append j , }
+      set first 0
+      if { $k in {timerType sunOffset seconds duration repetitions} } then { append j "\"$k\":$v" } else { append j "\"$k\":[json_toString $v]" }
+    }
+    append j "\}"
+  }
+  return "$j\}"
+}
+
+proc programs_actJson { a } {
+  set j "\{\"param\":[dict get $a param],\"valueType\":[dict get $a valueType],\"delayType\":[dict get $a delayType]"
+  foreach k {value delay channelId datapointId channelName datapointName datapointType} { append j ",\"$k\":[json_toString [dict get $a $k]]" }
+  return "$j\}"
+}
+
+proc programs_detail { } {
+  global V2_QUERY
+  v2_requireLevel ADMIN
+  if { ![regexp {^id=([0-9]{1,10})$} $V2_QUERY -> id] } then { jsonrpc_error 403 "invalid argument (id)" }
+  programs_requireManageable $id
+  set d [programs_describe $id]
+  if { "" == $d } then { programs_failed GET "read program $id" }
+  set rules [programs_logic $id]
+  if { "" == $rules } then { programs_failed GET "read the logic of program $id" }
+  api_syslog daemon.notice "cid=[api_cid] method=GET /api/v2/programs uid=[v2_sessionUid] action=read logic of program $id"
+  set base [programs_json $id $d]
+  v2_respondJson "[string range $base 0 end-1],\"rules\":$rules\}"
+}
+
 proc v2_programs_handle { } {
   global env
   set verb $env(REQUEST_METHOD)
+  if { "GET" eq $verb } then { programs_detail; return }
   if { "POST" ne $verb } then { programs_manage $verb; return }
   v2_requireLevel USER
 

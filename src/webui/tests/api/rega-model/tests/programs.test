@@ -45,7 +45,7 @@ proc scripts {r} { return [join [dict get $r rega_calls] \n] }
 test programs-0 {the handler file exists, is complete Tcl and the route is registered} -body {
   set fd [open [file join $gen rega-model v2 programs.tcl] r]; set c [read $fd]; close $fd
   set fd [open [file join $gen dispatcher v2 router.tcl] r]; set r [read $fd]; close $fd
-  list [info complete $c] [regexp {/programs\s+\{\{POST PUT DELETE\}\s+programs.tcl\s+v2_programs_handle\}} $r]
+  list [info complete $c] [regexp {/programs\s+\{\{GET POST PUT DELETE\}\s+programs.tcl\s+v2_programs_handle\}} $r]
 } -result {1 1}
 
 test programs-1 {a program is run and the time of its last run comes back from ReGa} -body {
@@ -86,21 +86,21 @@ test programs-6 {a user needs the full access right, an administrator does not; 
   list [err $a] [status $b] [status $c] [err $d] [regexp {ID_PROGRAMS} [scripts $d]]
 } -result {{403 400 {access denied (program)}} 200 200 {403 400 {access denied (\"USER\" needed, session level 1)}} 0}
 
-test programs-7 {only POST, PUT and DELETE are allowed (GET is 405 with that Allow list); without a session HTTP 401 and no ReGa script runs} -body {
+test programs-7 {only GET, POST, PUT and DELETE are allowed (PATCH is 405 with that Allow list); without a session HTTP 401 and no ReGa script runs} -body {
   set out {}
-  foreach m {GET} {
+  foreach m {PATCH} {
     set r [post {} -method $m]
     regexp {Allow: ([^\r\n]+)} [dict get $r headers] -> allow
     lappend out [status $r]/$allow
   }
   set n [golden::call_raw {{"id":"7","execute":true}} [golden::prepare [list -candidate $::CAND -method POST -contenttype application/json -setenv {REQUEST_URI /api/v2/programs} -header {X-Requested-With XMLHttpRequest} -sessions $::ADMIN]]]
   lappend out [status $n] [llength [dict get $n rega_calls]]
-} -result {{405/POST, PUT, DELETE} 401 0}
+} -result {{405/GET, POST, PUT, DELETE} 401 0}
 
 test programs-8 {the scripts (read, run, switch, describe, change, copy, delete) look the id up in the program collection and the id is a script variable, never code} -body {
   set fd [open [file join $gen rega-model v2 programs.tcl] r]; set c [read $fd]; close $fd
   list [regexp -all {foreach\(i, dom.GetObject\(ID_PROGRAMS\).EnumIDs\(\)\)} $c] [regexp {dom.GetObject\(\$} $c] [regexp -all {ProgramExecute\(\)} $c]
-} -result {7 0 1}
+} -result {8 0 1}
 
 proc modelprograms {extra} {
   set rec [concat {ID 1053 NAME Evening TIME {2026-10-12 21:00:00} ACTIVE true INTERNAL false} $extra]
@@ -264,5 +264,73 @@ test programs-31 {a CCU that does not answer the change gives HTTP 501, never a 
     -header {X-Requested-With XMLHttpRequest} -header {X-Session-Id AbCdEf1234} -sessions $::ADMIN -rega $rega]]]
   err $r
 } -result {502 501 {the CCU did not take the change}}
+
+# ---- reading the logic of a program (GET ?id=, administrators)
+set LOGIC {*RuleSubRule*}
+set LOGICOUT [join [list \
+  {RULE IDX {0} HASCOND {true}} \
+  {COND G {0} GOP {2} S {0} SOP {1} LT {18} LV {3941} CH {3935} CT {1} CT2 {4} RT1 {16} RV1 {1} RT2 {16} RV2 {0} LVN {VirtualDevices.INT0000006:1.CONTROL_MODE} CHN {Kinderzimmer Bennett Gruppe:1} VT {16/29} UNIT {} VN0 {0} VN1 {1} VL {AUTO-MODE;MANU-MODE;PARTY-MODE}} \
+  {COND G {0} GOP {2} S {1} SOP {2} LT {24} LV {2025-10-12 08:03:24} CH {65535} CT {3} CT2 {13} RT1 {18} RV1 {23608} RT2 {0} RV2 {} LVN {} CHN {} VT {} UNIT {} VN0 {} VN1 {} VL {}} \
+  {TIME TT {9} SOT {0} SEC {23400} DUR {0} TIME {1970-01-01 07:30:00} BEGIN {2025-10-04 00:00:00} END {1970-01-01 01:00:00} REP {0}} \
+  {COND G {1} GOP {2} S {0} SOP {1} LT {19} LV {950} CH {65535} CT {8} CT2 {4} RT1 {4} RV1 {20.000000} RT2 {4} RV2 {0.000000} LVN {Name \o mit \c Klammern} CHN {} VT {4/0} UNIT {°C} VN0 {} VN1 {} VL {}} \
+  {DESTS BOR {true} COUNT {2}} \
+  {DEST P {18} VT {4} VPT {28} V {21.000000} VP {2026-11-04 00:03:00} CH {3935} DP {3943} CHN {Kinderzimmer:1} DPN {VirtualDevices.INT0000006:1.MANU_MODE} DPT {4/0}} \
+  {DEST P {20} VT {20} VPT {0} V {if (x) \o\nWrite("a\\b");\n\c} VP {} CH {65535} DP {65535} CHN {} DPN {} DPT {}} \
+  {RULE IDX {1} HASCOND {false}} \
+  {DESTS BOR {false} COUNT {0}} \
+  {END DONE {true}}] "\r\n"]
+proc logic {args} {
+  array set o [list -sessions $::ADMIN -query id=7 -found $::FOUND -out $::LOGICOUT]
+  array set o $args
+  set rega [list [list $::READ $o(-found)] [list $::DESCRIBE $::DESC1] [list $::LOGIC $o(-out)]]
+  return [golden::call_raw {} [golden::prepare [list -candidate $::CAND -method GET -contenttype {} -setenv {REQUEST_URI /api/v2/programs} -query $o(-query) \
+    -header {X-Requested-With XMLHttpRequest} -header {X-Session-Id AbCdEf1234} -sessions $o(-sessions) -rega $rega]]]
+}
+
+test programs-40 {the logic of a program is read: rules, groups with their operators, the time module, the actions and the delay} -body {
+  set r [logic]
+  set b [body $r]
+  list [status $r] [regexp {^\{"id":"7","name":"Neu","description":"Text","isActive":false,"isVisible":true,"isOperable":false,"rules":\[\{"hasCondition":true,"groups":\[\{"op":"or","conditions":\[} $b] \
+    [regexp {"kind":"device","objectId":"3941","channelId":"3935","objectName":"VirtualDevices.INT0000006:1.CONTROL_MODE","channelName":"Kinderzimmer Bennett Gruppe:1","valueType":"16\\/29","unit":"","valueName0":"0","valueName1":"1","valueList":"AUTO-MODE;MANU-MODE;PARTY-MODE","right":"1","right2":"0","test":1,"trigger":4,"rightType":16,"right2Type":16\}} $b] \
+    [regexp {"op":"or","kind":"time".*"time":\{"timerType":9,"sunOffset":0,"seconds":23400,"duration":0,"time":"1970-01-01 07:30:00","begin":"2025-10-04 00:00:00","end":"1970-01-01 01:00:00","repetitions":0\}\}} $b] \
+    [regexp {"stopDelays":true,"actions":\[\{"param":18,"valueType":4,"delayType":28,"value":"21.000000","delay":"2026-11-04 00:03:00"} $b] \
+    [regexp {\{"hasCondition":false,"groups":\[\],"stopDelays":false,"actions":\[\]\}\]\}$} $b]
+} -result {200 1 1 1 1 1}
+
+test programs-41 {braces, backslashes and line breaks in a name or a script come back as they were} -body {
+  set b [body [logic]]
+  list [regexp {"objectName":"Name \{ mit \} Klammern"} $b] [regexp {"value":"if \(x\) \{\\nWrite\(\\"a\\\\b\\"\);\\n\}"} $b]
+} -result {1 1}
+
+test programs-42 {the operators are and / or: the second group joins with the operator of the first, a single with its own} -body {
+  set b [body [logic]]
+  list [regexp {"groups":\[\{"op":"or","conditions":\[\{"op":"and","kind":"device".*\},\{"op":"or","kind":"time"} $b] [regexp {\}\]\},\{"op":"or","conditions":\[\{"op":"and","kind":"sysvar"} $b]
+} -result {1 1}
+
+test programs-43 {only an administrator reads the logic (a user and a guest are 403) and no program script runs for them} -body {
+  set a [logic -sessions $::USER]
+  set b [logic -sessions $::GUEST]
+  list [status $a] [status $b] [progcalls $a] [regexp {RuleSubRule} [scripts $a][scripts $b]]
+} -result {403 403 0 0}
+
+test programs-44 {a bad id is 422; an unknown id, a copy is 404; an internal program is 403; nothing is read} -body {
+  set out {}
+  foreach q {id=x {} id= id=7&a=1} { lappend out [lindex [err [logic -query $q]] 0] }
+  set unknown [logic -found {}]
+  set copy [logic -found {FOUND {true} INTERNAL {false} COPY {true} FULL {true}}]
+  set internal [logic -found {FOUND {true} INTERNAL {true} COPY {false} FULL {true}}]
+  lappend out [lindex [err $unknown] 0] [lindex [err $copy] 0] [lindex [err $internal] 0] [regexp {RuleSubRule} [scripts $unknown][scripts $copy][scripts $internal]]
+} -result {422 422 422 422 404 404 403 0}
+
+test programs-45 {an answer that stops before the end marker is a failure (HTTP 502), never a half program} -body {
+  set cut [join [lrange [split $::LOGICOUT "\n"] 0 4] "\n"]
+  err [logic -out $cut]
+} -result {502 501 {the CCU did not take the change}}
+
+test programs-46 {the script is fixed text: the id is a variable and it only reads (no write call)} -body {
+  set fd [open [file join $gen rega-model v2 programs.tcl] r]; set c [read $fd]; close $fd
+  regexp {set PROGRAM_LOGIC_SCRIPT \{.*?\n\}\n\nproc programs_unescape} $c body
+  list [regexp {i == progId} $body] [regexp {dom.GetObject\(\$} $body] [regexp {\.(Active|Name|PrgInfo|Visible|Remove|ProgramUpdate|DeleteObject|CreateObject|Destination[A-Za-z]*|OperatorType|ConditionType[0-9]*)\([^)]} $body]
+} -result {1 0 0}
 
 cleanupTests

@@ -224,6 +224,14 @@ the changed fields are sent); *Copy* asks for a new name and makes an inactive c
 name must be 1 to 100 characters and not used by any other ReGa object (HTTP 409, told in the dialog). **Not built:** the
 conditions and actions of a program; they stay in the classic *Programs and connections* editor (a program made here has none).
 
+**Reading the logic (administrators).** Each row has a **Manage** menu with *Logic*, *Edit*, *Copy* and *Delete*. *Logic* opens a
+read-only dialog that shows what a program does in words, read with `GET /api/v2/programs?id=`: the rules (*If*, *Else if*,
+*Else*), the condition groups with their *and* / *or*, each single condition (a device datapoint, a system variable or a time
+control, with the name of the value, the unit and when it triggers) and the actions (*Set X to Y*, *Run a script* with the script
+on request, and the delay). It is the first stage of the program editor: it proves the decoding of ReGa's integer codes against
+every program of the restored copy (54 of 54 read, 46 device, 19 system variable and 10 time conditions; the actions are 74
+scripts, 23 device values, 1 system variable). Anything the formatter does not know says so and points to the classic interface.
+
 ## System variables: status and control
 
 The first page that **writes**. The list is the classic one: name, description, last modified and status, with a name

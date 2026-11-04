@@ -6,7 +6,7 @@
 #   GET  /api/v2/schema     v2/schema.tcl    v2_schema_handle     (SP032 schema layer)
 #   GET  /api/v2/events     v2/events.tcl    v2_events_handle     (IC008, event-push)
 #   GET  /api/v2/model      v2/model.tcl     v2_model_handle      (IC009, rega-model)
-#   POST|PUT|DELETE /api/v2/programs v2/programs.tcl  v2_programs_handle   (IC010, rega-model)
+#   GET|POST|PUT|DELETE /api/v2/programs v2/programs.tcl  v2_programs_handle   (IC010, rega-model)
 #   POST /api/v2/rooms      v2/rooms.tcl     v2_rooms_handle      (IC011, rega-model)
 #   POST /api/v2/functions  v2/rooms.tcl     v2_functions_handle  (IC011, rega-model)
 #   GET|PUT /api/v2/profile v2/profile.tcl   v2_profile_handle    (IC012, user-profile)
@@ -39,7 +39,7 @@ set V2_ROUTES {
   /schema    {GET  schema.tcl    v2_schema_handle}
   /events    {GET  events.tcl    v2_events_handle}
   /model     {GET  model.tcl     v2_model_handle}
-  /programs  {{POST PUT DELETE} programs.tcl v2_programs_handle}
+  /programs  {{GET POST PUT DELETE} programs.tcl v2_programs_handle}
   /rooms     {POST rooms.tcl     v2_rooms_handle}
   /functions {POST rooms.tcl     v2_functions_handle}
   /profile   {{GET PUT} profile.tcl v2_profile_handle}

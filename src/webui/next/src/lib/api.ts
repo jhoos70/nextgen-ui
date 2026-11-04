@@ -477,6 +477,65 @@ export function makeDeleteProgram(doFetch: Fetch = defaultFetch): (sid: string, 
 const deleteProgramDefault = makeDeleteProgram();
 export const deleteProgram = (sid: string, id: string): Promise<{ id: string; deleted: boolean }> => deleteProgramDefault(sid, id);
 
+/** One single condition of a program as ReGa holds it; the numbers are ReGa's own codes (see program-logic.ts). */
+export interface LogicCondition {
+  op: "and" | "or"; // how it joins the one before it in its group
+  kind: "device" | "sysvar" | "time" | "unknown";
+  objectId: string;
+  objectName: string; // a datapoint ("VirtualDevices.INT0000006:1.CONTROL_MODE") or a system variable
+  channelId: string;
+  channelName: string;
+  valueType: string; // "type/subtype" of the datapoint or variable
+  unit: string;
+  valueName0: string;
+  valueName1: string;
+  valueList: string; // "A;B;C" for a list
+  test: number; // 1 compare to a list or logic value, 5 =, 6/7 range, 8 >, 9 >=, 10 <, 11 <=, 12 !=, 3 time
+  trigger: number; // 4 on change, 13 on update, 15 check only
+  rightType: number;
+  right: string;
+  right2Type: number;
+  right2: string;
+  time?: { timerType: number; sunOffset: number; seconds: number; duration: number; time: string; begin: string; end: string; repetitions: number };
+}
+
+export interface LogicAction {
+  param: number; // 18 a device datapoint, 19 a system variable, 20 a script
+  valueType: number;
+  delayType: number; // 28 = delayed
+  value: string; // the value to set, or the script
+  delay: string; // seconds
+  channelId: string;
+  datapointId: string;
+  channelName: string;
+  datapointName: string;
+  datapointType: string;
+}
+
+export interface LogicRule {
+  hasCondition: boolean; // false: the "else" part
+  groups: { op: "and" | "or"; conditions: LogicCondition[] }[];
+  stopDelays: boolean;
+  actions: LogicAction[];
+}
+
+export interface ProgramLogic extends ManagedProgram {
+  rules: LogicRule[];
+}
+
+/** GET /programs?id=: the conditions and actions of a program, read only (administrators). */
+export function makeGetProgramLogic(doFetch: Fetch = defaultFetch): (sid: string, id: string) => Promise<ProgramLogic> {
+  return async function getProgramLogic(sid: string, id: string): Promise<ProgramLogic> {
+    const { doc, status } = await send(doFetch, `/programs?id=${encodeURIComponent(id)}`, { method: "GET", headers: headersFor(sid) });
+    throwIfError(doc, status);
+    const d = doc as Partial<ProgramLogic> | null;
+    if (!d || typeof d.id !== "string" || !Array.isArray(d.rules)) throw new ApiError(0, "unexpected answer", status);
+    return { ...toManagedProgram(d, status), rules: d.rules };
+  };
+}
+const getProgramLogicDefault = makeGetProgramLogic();
+export const getProgramLogic = (sid: string, id: string): Promise<ProgramLogic> => getProgramLogicDefault(sid, id);
+
 export interface ProgramRun {
   id: string;
   executed: boolean;
