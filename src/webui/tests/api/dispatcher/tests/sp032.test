@@ -41,14 +41,14 @@ test sp032-1 {acceptance[0]: system.describe returns the API header and procs so
   foreach {all nm} $n { lappend procs $nm }
   list [regexp {"id": "urn:www-homematic-com:homematic-jsonrpc-api","summary": "Zugriff auf HomeMatic Zentrale","help": "/api/homematic.cgi"} $b] \
     [llength $procs] [expr {$procs eq [lsort $procs]}]
-} -result {1 179 1}
+} -result {1 182 1}
 
-test sp032-2 {acceptance[1],[5]: system.listMethods lists all 179 entries sorted by name with name/level/info} -body {
+test sp032-2 {acceptance[1],[5]: system.listMethods lists all 182 entries sorted by name with name/level/info} -body {
   set r [post {{"method":"system.listMethods","params":{},"id":1}}]
   set procs {}
   foreach {all nm} [regexp -all -inline {"name": "([A-Za-z_.]+)","level": "[A-Z]+","info": } [dict get $r body]] { lappend procs $nm }
   list [llength $procs] [expr {$procs eq [lsort $procs]}]
-} -result {179 1}
+} -result {182 1}
 
 test sp032-3 {acceptance[2]: system.methodHelp returns the INFO text; non-ASCII characters stay intact (NFR0)} -body {
   set r [post {{"method":"system.methodHelp","params":{"name":"CCU.getSerial"},"id":1}}]
@@ -79,15 +79,15 @@ test sp032-6 {acceptance[6] [TARGET]: the privilege matrix of methods.conf} -bod
   }
   array set ra $reg(CCU.createFile); array set rb $reg(Session.logout); array set rd $reg(CCU.existsFile); array set rf $reg(RecoveryMode.enter)
   list $none [dict get $c NONE] [dict get $c GUEST] [dict get $c USER] [dict get $c ADMIN] $ra(LEVEL) $rb(LEVEL) $rd(LEVEL) $rf(LEVEL)
-} -result [list {Interface.isPresent ReGa.isPresent Session.login WebUI.getColors system.describe system.getEnergyPrice system.listMethods system.methodHelp} 8 48 30 93 ADMIN GUEST GUEST ADMIN]
+} -result [list {Interface.isPresent ReGa.isPresent Session.login WebUI.getColors system.describe system.getEnergyPrice system.listMethods system.methodHelp} 8 49 31 94 ADMIN GUEST GUEST ADMIN]
 
-test sp032-7 {acceptance[7] [V2]: GET /api/v2/schema with a GUEST session is HTTP 200 with exactly 179 methods, each with name/level/info/params/result} -body {
+test sp032-7 {acceptance[7] [V2]: GET /api/v2/schema with a GUEST session is HTTP 200 with exactly 182 methods, each with name/level/info/params/result} -body {
   set r [post {} -method GET -contenttype {} -setenv {REQUEST_URI /api/v2/schema} -header {X-Requested-With XMLHttpRequest} -header {X-Session-Id GuestSid001}]
   set b [dict get $r body]
   set n 0
   foreach {all nm} [regexp -all -inline {\{"name":"([A-Za-z_.]+)","level":"[A-Z]+","info":"} $b] { incr n }
   list [status $r] $n [regexp {"version":"[^"]+"} $b] [regexp -all {"params":\{} $b] [regexp -all {"result":} $b]
-} -result {200 179 1 179 179}
+} -result {200 182 1 182 182}
 
 test sp032-8 {acceptance[7] [V2]: without a valid sid HTTP 401, with an unknown session HTTP 401} -body {
   set a [post {} -method GET -contenttype {} -setenv {REQUEST_URI /api/v2/schema} -header {X-Requested-With XMLHttpRequest}]

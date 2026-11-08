@@ -22,10 +22,10 @@ proc result {r} {
 }
 set S {_session_id_ AbCdEf1234}
 proc chn {id} {
-  return "ID $id NAME ch$id ADDRESS NEQ1:$id DEVICE 1 INDEX $id GROUP_PARTNER_ID 65535 READY_CONFIG true MODE MODE_DEFAULT CATEGORY CATEGORY_NONE USABLE true LOGGED false VISIBLE true LOGABLE true READABLE true WRITABLE false EVENTABLE true AES_AVAILABLE false VIRTUAL false CHANNEL_TYPE KEY CHANNEL_NAME HM-X"
+  return "ID $id NAME ch$id ADDRESS NEQ1:$id DEVICE 1 INDEX $id GROUP_PARTNER_ID 65535 READY_CONFIG true MODE MODE_DEFAULT CATEGORY CATEGORY_NONE USABLE true LOGGED false VISIBLE true LOGABLE true READABLE true WRITABLE false EVENTABLE true AES_AVAILABLE false VIRTUAL false INTERNAL false CHANNEL_TYPE KEY CHANNEL_NAME HM-X"
 }
 proc dev {id} {
-  return [list ID $id NAME "Dev $id" ADDRESS NEQ$id INTERFACE BidCos-RF DEVICE_TYPE HM-X READY_CONFIG true GROUP_ONLY false CHANNELS [list [chn 1]]]
+  return [list ID $id NAME "Dev $id" ADDRESS NEQ$id INTERFACE BidCos-RF DEVICE_TYPE HM-X READY_CONFIG true GROUP_ONLY false SERVICE_MSG true CHANNELS [list [chn 1]]]
 }
 
 test sp025-nfr0 {NFR0: listAllDetail makes 1 + N script round-trips (one per device) after the privilege lookup (frozen N+1 cost)} -body {
@@ -41,16 +41,19 @@ test sp025-nfr7 {NFR7: a failing ReGa script gives [] for listAll and listAllDet
   list [result [call Device.listAll $S -regafail {*EnumIDs()*}]] [result [call Device.listAllDetail $S -regafail {*EnumIDs()*}]] [result [call Device.getNewDeviceCount $S -regafail {*iNewCount*}]]
 } -result {{[]} {[]} {""}}
 
-test sp025-nfr8 {NFR8: internal channels are excluded in the scripts of get and listAllDetail} -body {
+test sp025-nfr8 {NFR8 (since the upstream merge): internal channels are no longer dropped by get and listAllDetail, they are reported with isInternal and are not writable} -body {
   set a [call Device.listAllDetail $S -rega [list [list {*Write("ID *} [dev 1]] [list {*EnumIDs()*} {{1}}]]]
   set b [call Device.get [list {*}$S id 1] -rega [list [list {*Write("ID *} [dev 1]]]]
-  list [string match {*false == channel.Internal()*} [join [dict get $a rega_calls] \n]] [string match {*false == channel.Internal()*} [join [dict get $b rega_calls] \n]]
-} -result {1 1}
+  set sa [join [dict get $a rega_calls] \n]
+  set sb [join [dict get $b rega_calls] \n]
+  list [string match {*var isInternal = channel.Internal();*writable = false;*} $sa] [string match {*var isInternal = channel.Internal();*writable = false;*} $sb] \
+    [string match {*false == channel.Internal()*} $sa$sb] [regexp {"isInternal":false} [result $a]] [regexp {"isInternal":false} [result $b]]
+} -result {1 1 0 1 1}
 
 test sp025-nfr9 {NFR9: listAllDetail emits the device isReady as a string and the channel isReady as the raw token} -body {
   set a [call Device.listAllDetail $S -rega [list [list {*Write("ID *} [dev 1]] [list {*EnumIDs()*} {{1}}]]]
   set j [result $a]
-  list [regexp {"isReady":"true","channels"} $j] [regexp {"isReady":true,"isUsable"} $j]
+  list [regexp {"isReady":"true","enabledServiceMsg":"true","channels"} $j] [regexp {"isReady":true,"isUsable"} $j]
 } -result {1 1}
 
 test sp025-nfr6 {NFR6: getRFAddressOfAllDevices calls hmscript without an argument array - the script gets no variable declarations} -body {

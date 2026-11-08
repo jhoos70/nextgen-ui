@@ -60,7 +60,7 @@ test sp002-err1 {an empty cache file or a cache of another methods.conf is ignor
   set b [drv { puts [registry_load methods.conf] } -fs $fs]
   mock::fs::destroy $fs
   list [lines $a] [lines $b]
-} -result {179 179}
+} -result {182 182}
 
 test sp002-err2 {a cache entry that is not a valid Tcl list is ignored and the registry is rebuilt from methods.conf} -body {
   set fs [mock::fs::create]
@@ -71,7 +71,7 @@ test sp002-err2 {a cache entry that is not a valid Tcl list is ignored and the r
   set r [drv { puts [registry_load methods.conf] } -fs $fs]
   mock::fs::destroy $fs
   lines $r
-} -result 179
+} -result 182
 
 test sp002-golden {golden re-run: the registry fixtures replay through the staged dispatcher libraries and the corrected methods.conf (documented changes excluded)} -body {
   set names {}

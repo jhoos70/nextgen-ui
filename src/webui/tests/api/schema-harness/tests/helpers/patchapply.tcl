@@ -8,6 +8,7 @@
 # API
 #   patchapply::patchdir                   OPENCCU_PATCH_DIR or the default directory
 #   patchapply::compose_legacy             temp tree with www/api and www/tcl copied from src/webui/www
+#   patchapply::compose_patchbase          the same for the base revision the patches were written for (PATCH_BASE_REV)
 #   patchapply::compose_staged             the same tree overlaid with every staged component file
 #   patchapply::apply_all TREE ?DIR?       ordered list of {number OK|FAIL}, or "skip" without DIR
 #   patchapply::report RESULTS legacy|staged   'legacy tree: N OK' or 'patch NNNN: OK|FAIL' lines
@@ -66,6 +67,15 @@ proc ::patchapply::compose_legacy {} {
   variable legacy_www
   set tree [tmpdir]
   foreach s {api tcl} { copytree [file join $legacy_www $s] [file join $tree www $s] }
+  normalize $tree
+  return $tree
+}
+
+# the tree the patches were WRITTEN for (PATCH_BASE_REV), not the tree of LEGACY_REV
+proc ::patchapply::compose_patchbase {} {
+  set www [file join [::mock::snapshot PATCH_BASE_REV] src webui www]
+  set tree [tmpdir]
+  foreach s {api tcl} { copytree [file join $www $s] [file join $tree www $s] }
   normalize $tree
   return $tree
 }

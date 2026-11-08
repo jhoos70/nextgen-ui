@@ -25,7 +25,7 @@ set IDS "SerialNumber=OEQ1234567\nBidCoS-Address=0123456789\n"
 
 test sp039-0 {the staged method scripts of SP039 exist and are complete Tcl} -body {
   set bad {}
-  foreach f {getserial getaddress getheatinggrouplist gethmipaddress getinfoledconfig getstickyunreachstate getversion removeFieldTestActive setinfoledconfig setstickyunreach} {
+  foreach f {getserial getaddress getheatinggrouplist gethmipaddress getinfoledconfig getstickyunreachstate getversion setinfoledconfig setstickyunreach} {
     set p [file join $gen system-admin methods ccu $f.tcl]
     if {![file exists $p]} { lappend bad $f; continue }
     set fd [open $p r]; set c [read $fd]; close $fd
@@ -110,15 +110,9 @@ test sp039-9 {hideStickyUnreach: mode 'true' touches the flag, anything else rem
   list [result $a] [lindex [dict get $a exec_calls] 0] [result $b] [lindex [dict get $b exec_calls] 0] $s0 $s1
 } -result {null {touch /etc/config/hideStickyUnreach} null {rm /etc/config/hideStickyUnreach} 0 1}
 
-test sp039-10 {removeFieldTestActive: true if rm printed nothing, false (e.g. file missing) otherwise} -body {
-  set a [call CCU.removeFieldTestActive $S]
-  set b [call CCU.removeFieldTestActive $S -execfail {{{rm*} {rm: cannot remove: No such file or directory}}}]
-  list [result $a] [result $b] [lindex [dict get $a exec_calls] 0]
-} -result {true false {rm /etc/config/fieldTestActive}}
-
 test sp039-11 {ADMIN only: a USER session is denied (400) for the SP039 methods} -body {
   set codes {}
-  foreach m {CCU.getSerial CCU.getAddress CCU.getHmIPAddress CCU.getVersion CCU.getHeatingGroupList CCU.getInfoLedConfig CCU.getStickyUnreachState CCU.removeFieldTestActive} {
+  foreach m {CCU.getSerial CCU.getAddress CCU.getHmIPAddress CCU.getVersion CCU.getHeatingGroupList CCU.getInfoLedConfig CCU.getStickyUnreachState} {
     lappend codes [lindex [err [call $m $S -sessions $USER]] 0]
   }
   lsort -unique $codes

@@ -30,6 +30,8 @@ export const NAV: readonly NavItem[] = [
   { id: "sysvars", group: "objects", minLevel: "USER", classic: ["menuControlPage/submenuSysVar", "menuSettingsPage/submenuSysVar"], ready: true, labelKey: "sysvars" },
   { id: "diagrams", group: "objects", minLevel: "USER", classic: ["menuControlPage/submenuDiagramListPage", "menuSettingsPage/submenuCreateDiagram"], ready: false },
   { id: "connections", group: "objects", minLevel: "ADMIN", classic: ["menuProgramsLinksPage/submenuDirectLinks"], ready: false },
+  // new in upstream Base (HMScriptExecutor, 2026-11): the classic "run a script" dialog for administrators
+  { id: "scripts", group: "objects", minLevel: "ADMIN", classic: ["menuProgramsLinksPage/submenuScriptExecutor"], ready: false },
   { id: "log", group: "system", minLevel: "USER", classic: ["menuControlPage/submenuSysProtocol"], ready: true, labelKey: "log" },
   // adding devices: the inbox of new devices and the teach-in action of the classic header
   { id: "inbox", group: "system", minLevel: "ADMIN", classic: ["menuSettingsPage/submenuDeviceInbox", "menuNewDevicesPage"], ready: false },

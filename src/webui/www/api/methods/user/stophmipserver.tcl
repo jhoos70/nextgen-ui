@@ -12,6 +12,6 @@
 
 admin_audit "stop HmIP server"
 
-exec -- /usr/bin/nohup /etc/init.d/S62HMServer stop >/dev/null &
+exec -- /usr/bin/monit stop HMIPServer >/dev/null &
 
 jsonrpc_response true

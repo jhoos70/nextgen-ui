@@ -3,7 +3,7 @@ namespace import ::tcltest::*
 
 # CF006 GET /api/homematic.cgi method help page (flow-model.md#cf006): the unauthenticated GET page
 # is reduced (no method names), the full documentation is the authenticated GET /api/v2/schema
-# (HTTP 401 without a sid, 405 Allow: GET for other verbs, 179 entries).
+# (HTTP 401 without a sid, 405 Allow: GET for other verbs, 182 entries).
 set here [file dirname [file normalize [info script]]]
 set gen [file dirname [file dirname [file dirname $here]]]
 source [file join $gen schema-harness tests helpers mocks.tcl]
@@ -33,11 +33,11 @@ test cf006-2 {step 2: the error-code table is part of the page} -body {
   list [regexp {<td>100</td>} $b] [regexp {<td>402</td>} $b] [regexp {<td>429</td>} $b]
 } -result {1 1 1}
 
-test cf006-3 {step 4: GET /api/v2/schema with a valid sid answers the 179 method entries; without a sid HTTP 401} -body {
+test cf006-3 {step 4: GET /api/v2/schema with a valid sid answers the 182 method entries; without a sid HTTP 401} -body {
   set a [get /api/v2/schema {*}$V2 -header {X-Session-Id AbCdEf1234}]
   set b [get /api/v2/schema {*}$V2]
   list [status $a] [regexp -all {\{"name":"[A-Za-z_.]+","level":} [dict get $a body]] [status $b]
-} -result {200 179 401}
+} -result {200 182 401}
 
 test cf006-4 {error path: other verbs on /api/v2/schema are HTTP 405 with Allow: GET} -body {
   set out {}

@@ -581,11 +581,10 @@ proc modify_easymode_ui {IGNORE_PARAMS profile pPROFILE} {
 
 #cgi_debug -on
 
-  global env
+  global env _cgi _cgi_uservar
   upvar $pPROFILE PROFILE_TMP
 
-  set params [split [cgi_unquote_input $env(QUERY_STRING)] &]
-
+  set params $_cgi(uservars)
 
   #Parametername eines evtl. Subsets auf den URL-Parametern generieren. z.B. subset_4_1
   set i 1
@@ -593,7 +592,10 @@ proc modify_easymode_ui {IGNORE_PARAMS profile pPROFILE} {
 
   foreach p $params {
 
-    if { [regexp {^(.*)=(.*)$} $p dummy name value] } then {
+    set name $p
+    set value $_cgi_uservar($name)
+
+    if { $name != "" } then {
 
       if { [lsearch -exact $IGNORE_PARAMS $name] >= 0} then {
 
@@ -646,7 +648,7 @@ proc base_put_profile {iface address profile peer ps_type {html_response 1}} {
 
   global HTMLTITLE env
 
-  set IGNORE_PARAMS {address cmd iface paramid peer pnr ps_id ps_type sid SUBSET_OPTION_VALUE NAME}
+  set IGNORE_PARAMS {address cmd iface paramid peer pnr ps_id ps_type sid SUBSET_OPTION_VALUE NAME _}
 
   if { $profile != "" } then {
     
@@ -1113,7 +1115,7 @@ proc cmd_link_paramset2 {iface address pps_descr pps ps_type {pnr 0}} {
     set idval "separate_${pnr}_$j"
 
     if { ! ($operations & 3) } then { continue }
-    if {    $operations & 1  } then { catch {set value $ps($param_id)} }
+    if {    $operations & 1  } then { catch {set value [cgi_quote_html $ps($param_id)]} }
     if {    $operations & 2  } then { set access "" } else { set access "disabled=\"disabled\"" }
 
     append s "<tr>"
@@ -1380,7 +1382,7 @@ proc cmd_link_paramset2 {iface address pps_descr pps ps_type {pnr 0}} {
 
           append s "<input type=\"hidden\" name=\"$param_id\"   value=\"$value_orig\" $id $access style=\"visibility:hidden;display:none;\" />"
           append s "<input type=\"text\"   name=\"__$param_id\" value=\"$value\"       id=\"$input_idval\" $access $hidden"
-          append s "  onblur=\"_iface='$iface'; ProofAndSetValue('$input_idval', '${idval}', [expr $min + 0.001], [expr $max + 0.001], parseFloat([expr 1 / $factor]));\" /></td>"
+          append s "  onblur=\"_iface='$iface'; ProofAndSetValue('$input_idval', '${idval}', '$min', '$max', parseFloat([expr 1 / $factor]));\" /></td>"
           append s "<td><div id=\"${input_idval}_unit\" $hidden>$unit ($min-$max)</div></td>"
       }
       "ENUM" {

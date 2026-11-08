@@ -14,6 +14,14 @@ array set LOGLEVELS {
   5 "\${dialogSettingsCMLogLevel3}"
 }
 
+array set HMIP_LOGLEVELS {
+  "0TRACE" "\${dialogSettingsCMLogLevel5}"
+  "1DEBUG" "\${dialogSettingsCMLogLevel0}"
+  "2INFO" "\${dialogSettingsCMLogLevel1}"
+  "3WARN" "\${dialogSettingsCMLogLevel2}"
+  "4ERROR" "\${dialogSettingsCMLogLevel3}"
+}
+
 array set REGA_LOGLEVELS {
   0 "\${dialogSettingsCMLogLevel0}"
   1 "\${dialogSettingsCMLogLevel1}"
@@ -62,10 +70,14 @@ proc action_acceptEula {} {
       puts "conInfo(\"EULA found\");"
       puts "jQuery('#fwUpload').hide();"
       puts "var dlg = new EulaDialog(translateKey('dialogEulaTitle'), data, function(result) {"
+        puts "var dlgPopup = parent.top.dlgPopup;"
+        puts "if (dlgPopup === undefined) {"
+          puts "dlgPopup = window.open('', 'ccu-main-window').dlgPopup;"
+        puts "}"
         puts "if (result == 1) {"
-          puts "parent.top.dlgPopup.hide();"
-          puts "parent.top.dlgPopup.setWidth(450);"
-          puts "parent.top.dlgPopup.LoadFromFile(url, \"action=$action\");"
+          puts "dlgPopup.hide();"
+          puts "dlgPopup.setWidth(450);"
+          puts "dlgPopup.LoadFromFile(url, \"action=$action\");"
         puts "} else {"
           puts "jQuery('#fwUpload').hide();"
           puts "dlgPopup.hide();"
@@ -78,16 +90,19 @@ proc action_acceptEula {} {
 
     puts "req.fail(function(data) {"
       puts "conInfo(\"EULA not available\");"
-      puts "parent.top.dlgPopup.hide();"
-      puts "parent.top.dlgPopup.setWidth(450);"
-      puts "parent.top.dlgPopup.LoadFromFile(url, \"action=$action\");"
+      puts "var dlgPopup = parent.top.dlgPopup;"
+      puts "if (dlgPopup === undefined) {"
+        puts "dlgPopup = window.open('', 'ccu-main-window').dlgPopup;"
+      puts "}"
+      puts "dlgPopup.hide();"
+      puts "dlgPopup.setWidth(450);"
+      puts "dlgPopup.LoadFromFile(url, \"action=$action\");"
     puts "});"
   }
 }
 
 proc action_firmware_update_confirm {} {
   global env
-   cgi_debug -on
   http_head
   division {class="popupTitle"} {
     #puts "Softwareupdate - Best&auml;tigung"
@@ -256,7 +271,7 @@ proc action_firmware_update_go {} {
 }
 
 proc action_firmware_update_cancel {} {
-  global env
+  global env filename
 
   if {[getProduct] < 3} {
     catch {exec rm /var/new_firmware.tar.gz}
@@ -326,13 +341,38 @@ proc checkIfFwOnly {} {
   }
 }
 
+proc execCmd {varName cmd} {
+  upvar 1 $varName variable
+  set rc [catch {eval $cmd} resVar]
+  if {$rc == 0} {
+    set variable $resVar
+  } else {
+    set variable ""
+  }
+}
+
 proc action_put_page {} {
-  global env sid REMOTE_FIRMWARE_SCRIPT LOGLEVELS REGA_LOGLEVELS RFD_URL HS485D_URL downloadOnly
+  global env sid REMOTE_FIRMWARE_SCRIPT LOGLEVELS HMIP_LOGLEVELS REGA_LOGLEVELS RFD_URL HS485D_URL downloadOnly
   http_head
 
   division {class="popupTitle j_translate"} {
     puts "\${dialogSettingsCMTitle}"
     #puts [isOldCCU]
+  }
+
+  if {[get_platform] != "oci" && [get_platform] != "lxc"} {
+    execCmd USERFSFREE_MB {exec df -m /usr/local | tail -1 | awk {{ print $(NF-2) }}}
+    # -1 marks free space that could not be determined
+    if { ! [string is double -strict $USERFSFREE_MB] || $USERFSFREE_MB < 0 } {
+      set USERFSFREE_MB -1
+    }
+    if { $USERFSFREE_MB >= 0 } {
+      set USERFSFREE_GB "[format "%.2f" [expr {$USERFSFREE_MB / 1024.0}]] GB"
+    } else {
+      set USERFSFREE_GB "\${dialogSettingsCMLblFreeUserSpaceUnknown}"
+    }
+    set USERFSFREE_MB_REQ 2867.2
+    set USERFSFREE_GB_REQ [format "%.1f" [expr {$USERFSFREE_MB_REQ / 1024.0}]]
   }
   
   division {class="CLASS20918"}  {
@@ -373,7 +413,12 @@ proc action_put_page {} {
             table_row {
               table_data {align="left"} {colspan="3"} {
                 #puts "[bold "Software-Update durchf�hren"]"
-                puts "<b>\${dialogSettingsCMLblPerformSoftwareUpdate}</b>"
+                puts "<br/><b>\${dialogSettingsCMLblPerformSoftwareUpdate}</b>"
+              }
+            }
+            table_row {
+              table_data {align="left"} {colspan="3"} {id="availableUserSpace"} {
+                puts "<i>\${dialogSettingsCMLblFreeUserSpace} $USERFSFREE_GB (&gt;&nbsp;$USERFSFREE_GB_REQ GB \${dialogSettingsCMLblFreeUserSpaceRequired})</i>"
               }
             }
             table_row {
@@ -398,19 +443,16 @@ proc action_put_page {} {
             }
             table_row {
               td {width="20"} {}
-              table_data {align="left"} {
+              table_data {align="left"} {colspan="2"} {
                 puts "\${dialogSettingsCMLblPerformSoftwareUpdateStep1}"
               }
-              table_data {
+            }
+            table_row {
+              td {width="20"} {}
+              table_data {align="left"} {colspan="2"} {
                 division {class="popupControls CLASS20905"} {
-                  table {
-                    table_row {
-                      table_data {
-                        division {class="CLASS20908" style="display: none"} {id="btnFwDownload"} {} "onClick=\"window.location.href='$REMOTE_FIRMWARE_SCRIPT?cmd=download&version=$cur_version&serial=$serial&lang=de&product=HM-CCU[getProduct]';\"" {}
-                        division {class="CLASS20908"}  "onClick=\"showCCULicense(false);\"" {puts "\${dialogSettingsCMBtnPerformSoftwareUpdateDownload}"}
-                      }
-                    }
-                  }
+                  division {class="CLASS20908" style="display: none;"} {id="btnFwDownload"} {} "onClick=\"window.location.href='$REMOTE_FIRMWARE_SCRIPT?cmd=download&version=$cur_version&serial=$serial&lang=de&product=HM-CCU[getProduct]';\"" {}
+                  division {class="CLASS20908" style="width: 150px; margin-left: 20px;"} "onClick=\"showCCULicense(false);\"" {puts "\${dialogSettingsCMBtnPerformSoftwareUpdateDownload}"}
                 }
               }
             }
@@ -422,30 +464,25 @@ proc action_put_page {} {
             }
             table_row {
               td {width="20"} {}
-              table_data {colspan="2"} {
-                form "$env(SCRIPT_NAME)?sid=$sid" name=firmware_form {target=firmware_upload_iframe} enctype=multipart/form-data method=post {
-                  export action=firmware_upload
-                  export downloadOnly=$downloadOnly
-                  file_button firmware_file size=30 maxlength=1000000
+              table_data {align="left"} {colspan="2"} {
+                form "/config/fileupload.ccc?sid=$sid&action=firmware_upload&downloadOnly=$downloadOnly&url=$env(SCRIPT_NAME)" {target=firmware_upload_iframe} name=firmware_form enctype=multipart/form-data method=post {
+                  file_button firmware_file size=30 maxlength=1000000 accept='.zip,.tgz,.tar,.img,.ext4,.vfat,application/zip,application/gzip,application/x-tar'
                 }
                 puts {<iframe name="firmware_upload_iframe" style="display: none;"></iframe>}
               }
             }
             table_row {
               td {width="20"} {}
-              table_data {align="left"} {
+              table_data {align="left"} {colspan="2"} {
                 puts "\${dialogSettingsCMLblPerformSoftwareUpdateStep3}"
               }
-              table_data {
+            }
+            table_row {
+              td {width="20"} {}
+              table_data {align="left"} {colspan="2"} {
                 division {class="popupControls CLASS20905"} {
-                  table {
-                    table_row {
-                      table_data {
-                        division {class="CLASS20919"} {onClick="stopHmIPServer();document.firmware_form.submit();showUserHint();"} {
-                          puts "\${dialogSettingsCMBtnPerformSoftwareUpdateUpload}"
-                        }
-                      }
-                    }
+                  division {class="CLASS20919" style="width: 150px; margin-left: 20px;"} {onClick="stopHmIPServer();document.firmware_form.submit();showUserHint();"} {id="btnSoftwareUpdateUpload"} {
+                    puts "\${dialogSettingsCMBtnPerformSoftwareUpdateUpload}"
                   }
                 }
               }
@@ -572,6 +609,21 @@ proc action_put_page {} {
                 table {class="CLASS20909"} {
                   table_row {
                     table_data {align="left"} {
+                      puts "\${dialogSettingsCMLblLogHomematicIP}"
+                    }
+                    table_data {align="right"} {
+                      if { [catch { set hmip_level [read_var /etc/config/syslog LOGLEVEL_HMIP] }] || $hmip_level == "" } {set hmip_level "ERROR"}
+                      cgi_select log_hmip= {id="select_log_hmip"} {
+                        foreach level [lsort [array names HMIP_LOGLEVELS]] {
+                          set levelVal [string range $level 1 end]
+                          set selected [expr { $levelVal == $hmip_level ? "selected" : "" }]
+                          cgi_option $HMIP_LOGLEVELS($level) value=$levelVal $selected
+                        }
+                      }
+                    }
+                  }
+                  table_row {
+                    table_data {align="left"} {
                       puts "\${dialogSettingsCMLblLogBidCosRF}"
                     }
                     table_data {align="right"} {
@@ -694,6 +746,7 @@ proc action_put_page {} {
     puts {
       apply_logging = function() {
         var pb = "action=apply_logging";
+        pb += "&level_hmip="+document.getElementById("select_log_hmip").value;
         pb += "&level_rfd="+document.getElementById("select_log_rfd").value;
         pb += "&level_hs485d="+document.getElementById("select_log_hs485d").value;
         //pb += "&level_pfmd="+document.getElementById("select_log_pfmd").value;
@@ -851,6 +904,25 @@ proc action_put_page {} {
       }
     }
   }
+  
+  if {[get_platform] != "oci" && [get_platform] != "lxc"} {
+    cgi_javascript {
+       puts "var userFreeMB = $USERFSFREE_MB;"
+       puts "var userFreeMBRequired = $USERFSFREE_MB_REQ;"
+       puts {
+         // block only if the free space is known to be too low
+         if (userFreeMB >= 0 && userFreeMB < userFreeMBRequired) {
+           jQuery('#availableUserSpace').css({ 'color': 'red', 'font-weight': 'bold' });
+           jQuery('#btnSoftwareUpdateUpload').removeAttr('onclick');
+           jQuery('#btnSoftwareUpdateUpload').css({ 'color': 'gray', 'pointer-events': 'none', 'cursor': 'default', 'opacity': '0.5' });
+           jQuery('#btnSoftwareUpdateUpload').attr('aria-disabled', 'true');
+           jQuery('#btnFwDirectDownload2').removeAttr('onclick');
+           jQuery('#btnFwDirectDownload2').css({ 'color': 'gray', 'pointer-events': 'none', 'cursor': 'default', 'opacity': '0.5' });
+           jQuery('#btnFwDirectDownload2').attr('aria-disabled', 'true');
+         }
+       }
+    }
+  }
 
   cgi_javascript {
     puts "translatePage('#messagebox');"
@@ -958,7 +1030,7 @@ proc action_createBackup {} {
 
 proc action_firmware_upload {} {
 
-  global env sid downloadOnly
+  global env sid downloadOnly filename
 
   if { [catch { import directDownload } error] } {
     set directDownload false
@@ -967,10 +1039,7 @@ proc action_firmware_upload {} {
   http_head
   
   if { $directDownload } {
-    set filename "/tmp/fup.tgz"
-  } else {
-    import_file -client firmware_file
-    set filename [lindex $firmware_file 0]
+    set filename "/usr/local/tmp/firmwareUpdateFile"
   }
 
   if {[getProduct] < 3} {
@@ -986,7 +1055,7 @@ proc action_firmware_upload {} {
       file rename -force -- $filename "/var/new_firmware.tar.gz"
       set action "askCreateBackup"
     } else {
-      file delete -force -- [lindex $firmware_file 0]
+      file delete -force -- $filename
       cgi_javascript {
         puts {
           startHmIPServer();
@@ -1085,10 +1154,14 @@ proc action_firmware_upload {} {
 
   cgi_javascript {
     puts "var url = \"$env(SCRIPT_NAME)?sid=$sid\";"
-    puts "parent.top.dlgPopup.hide();"
-    puts "parent.top.dlgPopup.setWidth(450);"
-    puts "parent.top.dlgPopup.downloadOnly = $downloadOnly;"
-    puts "parent.top.dlgPopup.LoadFromFile(url, \"action=$action\");"
+    puts "var dlgPopup = parent.top.dlgPopup;"
+    puts "if (dlgPopup === undefined) {"
+      puts "dlgPopup = window.open('', 'ccu-main-window').dlgPopup;"
+    puts "}"
+    puts "dlgPopup.hide();"
+    puts "dlgPopup.setWidth(450);"
+    puts "dlgPopup.downloadOnly = $downloadOnly;"
+    puts "dlgPopup.LoadFromFile(url, \"action=$action\");"
   }
 }
 
@@ -1299,13 +1372,20 @@ proc action_shutdown {} {
 }
 
 proc get_logserver {} {
-  return [read_var //etc/config/syslog LOGHOST]
+  return [read_var /etc/config/syslog LOGHOST]
 }
 
 # proc set_log_config {loghost level_rfd level_hs485d level_pfmd level_rega}
-proc set_log_config {loghost level_rfd level_hs485d level_rega} {
+proc set_log_config {loghost level_rfd level_hs485d level_rega level_hmip} {
   #global RFD_URL HS485D_URL PFMD_URL
   global RFD_URL HS485D_URL
+
+  # read in old syslog values
+  set LOGHOST [read_var /etc/config/syslog LOGHOST]
+  set LOGLEVEL_RFD [read_var /etc/config/syslog LOGLEVEL_RFD]
+  set LOGLEVEL_HS485D [read_var /etc/config/syslog LOGLEVEL_HS485D]
+  set LOGLEVEL_REGA [read_var /etc/config/syslog LOGLEVEL_REGA]
+  set LOGLEVEL_HMIP [read_var /etc/config/syslog LOGLEVEL_HMIP]
 
   set fd -1
   catch {set fd [open "/etc/config/syslog" w]}
@@ -1318,13 +1398,26 @@ proc set_log_config {loghost level_rfd level_hs485d level_rega} {
   puts $fd "LOGLEVEL_HS485D=$level_hs485d"
   # puts $fd "LOGLEVEL_PFMFD=$level_pfmd"
   puts $fd "LOGLEVEL_REGA=$level_rega"
+  puts $fd "LOGLEVEL_HMIP=$level_hmip"
   close $fd
   
-  catch { xmlrpc $RFD_URL logLevel [list int $level_rfd]}
-  catch { xmlrpc $HS485D_URL logLevel [list int $level_hs485d]}
-  # catch { xmlrpc $PFMD_URL logLevel [list int $level_pfmd]}
-  rega "system.LogLevel($level_rega)"
-  
+  if { "$LOGLEVEL_RFD" != "$level_rfd" } {
+    catch { xmlrpc $RFD_URL logLevel [list int $level_rfd]}
+  }
+
+  if { "$LOGLEVEL_HS485D" != "$level_hs485d" } {
+    catch { xmlrpc $HS485D_URL logLevel [list int $level_hs485d]}
+  }
+
+  if { "$LOGLEVEL_REGA" != "$level_rega" } {
+    rega "system.LogLevel($level_rega)"
+  }
+
+  #if { "$LOGLEVEL_HMIP" != "$level_hmip" ||
+  #     "$LOGHOST" != "$loghost" } {
+  #  exec /usr/bin/monit restart HMIPServer >/dev/null &
+  #}
+
   return 1
 }
 
@@ -1334,11 +1427,12 @@ proc action_apply_logging {} {
   import level_hs485d
   # import level_pfmd
   import level_rega
+  import level_hmip
   
   http_head
   
   # if {![set_log_config $log_server $level_rfd $level_hs485d $level_pfmd $level_rega]}
-  if {![set_log_config $log_server $level_rfd $level_hs485d $level_rega]} {
+  if {![set_log_config $log_server $level_rfd $level_hs485d $level_rega $level_hmip]} {
     puts "Failure"
     return
   }
@@ -1371,10 +1465,10 @@ proc action_download_logfile {} {
 cgi_eval {
   #cgi_debug -on
   cgi_input
-  catch {
-    import debug
-    cgi_debug -on
-  }
+  #catch {
+  #  import debug
+  #  cgi_debug -on
+  #}
 
   set action "put_page"
   set downloadOnly 0
@@ -1382,6 +1476,10 @@ cgi_eval {
   catch {import action}
   catch {import downloadOnly}
   catch {import filename}
+  # accept only a regular file that /config/fileupload.ccc has written
+  if {![regexp {^/usr/local/tmp/tmp\.[A-Za-z0-9]+$} $filename] || [catch {file type $filename} fileType] || $fileType ne "file"} {
+    set filename ""
+  }
 
   if {[session_requestisvalid 8] > 0} then action_$action
 }

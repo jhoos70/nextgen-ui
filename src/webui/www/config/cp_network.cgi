@@ -148,45 +148,42 @@ proc read_var { filename varname} {
 }
 
 proc action_cert_upload {} {
-  global env sid
-  cd /tmp/
+  global env sid filename
+  cd /usr/local/tmp/
   
   http_head
-  import_file -client cert_file
-  file rename -force -- [lindex $cert_file 0] "/var/server.pem"
-  
-  set filename [open "/var/server.pem" r]
-  
-  set beginPrivateKeyFound 0
-  set beginCertificateFound 0
-
-  while { [gets $filename line] >= 0 } {
-    if { [string equal $line "-----BEGIN RSA PRIVATE KEY-----"] == 1 || [string equal $line "-----BEGIN PRIVATE KEY-----"] == 1} {
-      set beginPrivateKeyFound 1
-    } elseif { [string equal $line "-----BEGIN CERTIFICATE-----"] == 1 } {
-      set beginCertificateFound 1
-    }
-  }
-  close $filename
-  if { $beginCertificateFound == 1 && $beginPrivateKeyFound == 1 } {
-    file copy -force -- "/var/server.pem" "/etc/config/server.pem"
-    file delete "/var/server.pem"
+  # accept only a readable certificate with its matching, unencrypted private key
+  set certValid [expr {![catch {exec /usr/bin/openssl x509 -noout -pubkey -in $filename 2>/dev/null} certPubKey]}]
+  set keyValid [expr {![catch {exec /usr/bin/openssl pkey -pubout -passin pass: -in $filename 2>/dev/null </dev/null} keyPubKey]}]
+  if { $certValid && $keyValid && $certPubKey eq $keyPubKey } {
+    catch { file copy -force -- "/etc/config/server.pem" "/etc/config/server.pem.bak" }
+    file rename -force -- $filename "/etc/config/server.pem"
     
     cgi_javascript {
       puts "var url = \"$env(SCRIPT_NAME)?sid=$sid\";"
       puts {
-        parent.top.dlgPopup.hide();
-        parent.top.dlgPopup.setWidth(600);
-        parent.top.dlgPopup.LoadFromFile(url, "action=cert_update_go");
+        var dlgPopup = parent.top.dlgPopup;
+        if (dlgPopup === undefined) {
+          dlgPopup = window.open('', 'ccu-main-window').dlgPopup;
+        }
+        dlgPopup.hide();
+        dlgPopup.setWidth(600);
+        dlgPopup.LoadFromFile(url, "action=cert_update_go");
       }
     }
   } else {
+    file delete -force -- $filename
+
     cgi_javascript {
       puts "var url = \"$env(SCRIPT_NAME)?sid=$sid\";"
       puts {
-        parent.top.dlgPopup.hide();
-        parent.top.dlgPopup.setWidth(600);
-        parent.top.dlgPopup.LoadFromFile(url, "action=cert_update_failed");
+        var dlgPopup = parent.top.dlgPopup;
+        if (dlgPopup === undefined) {
+          dlgPopup = window.open('', 'ccu-main-window').dlgPopup;
+        }
+        dlgPopup.hide();
+        dlgPopup.setWidth(600);
+        dlgPopup.LoadFromFile(url, "action=cert_update_failed");
       }
     }
   }
@@ -207,8 +204,9 @@ proc action_put_page {} {
   set dhcp ""
   set dns1 ""
   set dns2 ""
+  set vpn ""
   
-  read_config dhcp hostname ip mask gw dns1 dns2
+  read_config dhcp hostname ip mask gw dns1 dns2 vpn
   
   http_head
   
@@ -334,6 +332,42 @@ proc action_put_page {} {
 
         }
       }
+      table_row {class="CLASS21115"} {
+        table_data {class="CLASS21116"} {
+          puts "\${dialogSettingsNetworkTDVPNSettings}"
+        }
+        table_data {align=left} {
+          table {
+            table_row {
+              set checked ""
+              if {$vpn == "1"} { set checked "checked=true" }
+              table_data {class="CLASS21112"} {colspan="2"} {
+                cgi_checkbox mode=vpn {id="check_vpn"} $checked
+                puts "\${dialogSettingsNetworkVPNLblActivate}"
+              }
+            }
+            table_row {
+              table_data {width="10"} { }
+              table_data {class="CLASS21112"} {
+                division {class="popupControls CLASS21107"} {
+                  if {$vpn == "1"} {
+                    division {class="CLASS21117"} {onClick="window.open('/tailscale/', '_blank').focus();"} {
+                      puts "\${dialogSettingsNetworkVPNLblAuth}"
+                    }
+                  } else {
+                    division {class="CLASS21117"} {style="color:grey"} {
+                      puts "\${dialogSettingsNetworkVPNLblAuth}"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        table_data {class="CLASS21113"} {align="center"} {
+          puts "<img src=\"/ise/img/help.png\" onclick=\"MessageBox.show(translateKey('dialogSettingsNetworkVPNLblActivate')+' - '+translateKey('HelpTitle'), translateKey('dialogSettingsNetworkVPNHelpP1')+'<br/><br/>'+translateKey('dialogSettingsNetworkVPNHelpP2'), '', 450, 320) ;\">"
+        }
+      }
       table_row {class="CLASS21119"} {
         table_data {class="CLASS21116"} {
           #puts "Zertifikat<br />erstellen"
@@ -352,10 +386,9 @@ proc action_put_page {} {
             }
             table_row {
               table_data {width="20"} {}
-              table_data {colspan="2"} {
-                form "$env(SCRIPT_NAME)?sid=$sid" name=cert_form {target=cert_upload_iframe} enctype=multipart/form-data method=post {
-                  export action=cert_upload
-                  file_button cert_file size=30 maxlength=1000000
+              table_data {align="left"} {colspan="2"} {
+                form "/config/fileupload.ccc?sid=$sid&action=cert_upload&url=$env(SCRIPT_NAME)" name=cert_form {target=cert_upload_iframe} enctype=multipart/form-data method=post {
+                  file_button cert_file size=30 maxlength=1000000 accept='.pem,.crt'
                 }
                 puts {<iframe name="cert_upload_iframe" style="display: none;"></iframe>}
               }
@@ -366,17 +399,14 @@ proc action_put_page {} {
                 #puts "Schritt 3: Zertifikat auf Zentrale laden"
                 puts "\${dialogSettingsNetworkCertificateLblStep3}"
               }
-              table_data {align="right"} {
+            }
+            table_row {
+              table_data {width="20"} {}
+              table_data {colspan="2" align="left"} {
                 division {class="popupControls CLASS21107"} {
-                  table {
-                    table_row {
-                      table_data {
-                        division {class="CLASS21108"} {onClick="document.cert_form.submit();"} {
-                          #puts "Hochladen"
-                          puts "\${dialogSettingsNetworkCertificateLblUpload}"
-                        }
-                      }
-                    }
+                  division {class="CLASS21108" style="width: 150px; margin-left: 20px;"} {onClick="document.cert_form.submit();"} {
+                    #puts "Hochladen"
+                    puts "\${dialogSettingsNetworkCertificateLblUpload}"
                   }
                 }
               }
@@ -462,11 +492,17 @@ proc action_put_page {} {
           postBody: pb,
           sendXML: false,
           onSuccess: function(transport) {
-            if (transport.responseText.match(/^Success/g))PopupClose();
+            if (transport.responseText.match(/^Success/g)) {
+              PopupClose();
+              if (transport.responseText.match(/^SuccessReboot/g)) {
+                MessageBox.show(translateKey("dialogSettingsNetworkTitle"), translateKey("dialogSettingsNetworkMessageRebootRequired"));
+              }
+            }
             //else alert("Netzwerkkonfiguration konnte nicht gespeichert werden:\n"+transport.responseText);
             else alert(translateKey("dialogSettingsNetworkMessageAlertMessageError1") + "\n" +transport.responseText);
           }
         };
+        opts.postBody += "&vpn="+(document.getElementById("check_vpn").checked?"1":"0");
         new Ajax.Request(url, opts);
       }
     }
@@ -607,10 +643,15 @@ proc action_save_settings {} {
     import dhcp
     import dns1
     import dns2
-    if { [write_config $dhcp $hostname $ip $mask $gw $dns1 $dns2] } {
-      #activate the new settings
-    catch {exec "/etc/init.d/S40network" "restart" 2> &1 > /dev/null}
-      puts "Success"
+    import vpn
+    set rc [write_config $dhcp $hostname $ip $mask $gw $dns1 $dns2 $vpn]
+    if { $rc } {
+      # changed network settings only take effect after a reboot
+      if { $rc == 2 } {
+        puts "SuccessReboot"
+      } else {
+        puts "Success"
+      }
       # puts "\${dialogSettingsNetworkMessageSaveSettingsSucceed}"
       return
     } else {
@@ -643,8 +684,8 @@ proc set_property {s_var id value} {
   return 0
 }
 
-proc get_current_config {dhcp_var hostname_var ip_var mask_var gw_var dns1_var dns2_var} {
-  upvar $dhcp_var dhcp $hostname_var hostname $ip_var ip $mask_var mask $gw_var gw $dns1_var dns1 $dns2_var dns2
+proc get_current_config {dhcp_var hostname_var ip_var mask_var gw_var dns1_var dns2_var vpn_var} {
+  upvar $dhcp_var dhcp $hostname_var hostname $ip_var ip $mask_var mask $gw_var gw $dns1_var dns1 $dns2_var dns2 $vpn_var vpn
   set ifconfig_result [exec /sbin/ifconfig eth0]
   if {! [regexp -line {inet addr:([\d.]+).*Mask:([\d.]+)[^\d.]*$} $ifconfig_result dummy ip mask]} {return 0}
   set fd -1
@@ -668,8 +709,8 @@ proc get_current_config {dhcp_var hostname_var ip_var mask_var gw_var dns1_var d
   return 1
 }
 
-proc read_config {dhcp_var hostname_var ip_var mask_var gw_var dns1_var dns2_var} {
-  upvar $dhcp_var dhcp $hostname_var hostname $ip_var ip $mask_var mask $gw_var gw $dns1_var dns1 $dns2_var dns2
+proc read_config {dhcp_var hostname_var ip_var mask_var gw_var dns1_var dns2_var vpn_var} {
+  upvar $dhcp_var dhcp $hostname_var hostname $ip_var ip $mask_var mask $gw_var gw $dns1_var dns1 $dns2_var dns2 $vpn_var vpn
   set fd -1
   catch {set fd [open "/etc/config/netconfig" r]}
   if { $fd <0 } { return 0 }
@@ -685,16 +726,21 @@ proc read_config {dhcp_var hostname_var ip_var mask_var gw_var dns1_var dns2_var
   if {! [get_property $netconfig "${current_prefix}GATEWAY" gw] } {return 0}
   get_property $netconfig "${current_prefix}NAMESERVER1" dns1
   get_property $netconfig "${current_prefix}NAMESERVER2" dns2
+
+  # check for vpn enable status
+  set vpn [file exists "/etc/config/tailscaleEnabled"]
+  
   return 1
 }
 
-proc write_config {dhcp hostname ip mask gw dns1 dns2} {
+proc write_config {dhcp hostname ip mask gw dns1 dns2 vpn} {
   set fd -1
   catch {set fd [open "/etc/config/netconfig" r]}
   if { $fd <0 } { return 0 }
   set netconfig [read $fd]
   close $fd
   set fd -1
+  set old_netconfig $netconfig
   
   if { $dhcp } {
     set_property netconfig "MODE" "DHCP"
@@ -715,20 +761,40 @@ proc write_config {dhcp hostname ip mask gw dns1 dns2} {
   
   puts -nonewline $fd $netconfig
   close $fd
+  set changed [expr {$netconfig ne $old_netconfig}]
 
+  # set vpn status
+  set cur_vpn [file exists "/etc/config/tailscaleEnabled"]
+  if { $vpn != $cur_vpn } {
+    if { $vpn == 1 } {
+      exec touch /etc/config/tailscaleEnabled
+      exec /etc/init.d/S46tailscaled restart >/dev/null 2>/dev/null
+    } else {
+      exec /etc/init.d/S46tailscaled stop >/dev/null 2>/dev/null
+      exec rm -f /etc/config/tailscaleEnabled
+    }
+  }
+
+  if { $changed } { return 2 }
   return 1
 }
 
 cgi_eval {
   #cgi_debug -on
   cgi_input
-  catch {
-    import debug
-    cgi_debug -on
-  }
+  #catch {
+  #  import debug
+  #  cgi_debug -on
+  #}
   set action "put_page"
+  set filename ""
 
   catch { import action }
+  catch { import filename }
+  # accept only a regular file that /config/fileupload.ccc has written
+  if {![regexp {^/usr/local/tmp/tmp\.[A-Za-z0-9]+$} $filename] || [catch {file type $filename} fileType] || $fileType ne "file"} {
+    set filename ""
+  }
   if {[session_requestisvalid 8] > 0} then action_$action
 }
 

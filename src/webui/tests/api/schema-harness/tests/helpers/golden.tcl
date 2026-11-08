@@ -1,7 +1,7 @@
 # golden.tcl - golden-fixture runner of the webui-api test harness (schema-harness, T014).
 #
 # NFR-045: the v1 wire contract is frozen. Fixtures are {request, mock_script, expected_response}
-# per registry method ("Namespace.method.json"). They are seeded in memory from the 179-entry
+# per registry method ("Namespace.method.json"). They are seeded in memory from the 182-entry
 # registry (methods.conf ARGUMENTS) so no undeclared file has to be written; a curated override
 # for a method may be dropped into tests/fixtures/<Namespace.method>.json as a Tcl dict
 # (keys request / mock_script) and wins over the seed.

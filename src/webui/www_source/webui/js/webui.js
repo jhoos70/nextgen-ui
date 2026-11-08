@@ -52,7 +52,6 @@ WebUI = Singleton.create({
     if(typeof dcTimeout == "undefined") {
       dcTimeout = window.setTimeout(function () {
         showDutyCycle();
-        showCarrierSense();
         delete dcTimeout;
       }, 10);
     }
@@ -287,7 +286,6 @@ WebUI = Singleton.create({
       // Check the dutyCycle and carrierSense periodically
       new PeriodicalExecuter(function () {
         showDutyCycle();
-        showCarrierSense();
       }, checkDutyCycleInterval);
 
       if (getProduct() >= 3) {
@@ -488,6 +486,7 @@ WebUI = Singleton.create({
     this.currentPageOptions  = options;
     
     this.currentPage.enter(options);
+    window.name = 'ccu-main-window';
     window.setTimeout(() => {
       if(jQuery(':focus').length === 0) {
         jQuery('#content')[0].focus();

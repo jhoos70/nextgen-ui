@@ -52,14 +52,14 @@ test sp045-3 {acceptance[7] [V2]: getEnergyPrice is strict JSON on /api/v2/rpc, 
     [result [call system.getEnergyPrice {} -sessions {} -files [list etc/config/energyPrice ""] {*}$::V2]]
 } -result [list {{"Price":"0.30","Currency":"EUR"}} {{"Currency":"EUR","PriceCurrent":0.3,"PriceGas":0.1,"GasHeatingValue":10,"GasConditionNumber":1}} {{"Price":"unknown","Currency":"unknown"}}]
 
-test sp045-4 {acceptance[3],NFR2,NFR4: getPositionData answers the single-quoted JS array with the time zone of time.conf (default CET/CEST)} -body {
+test sp045-4 {acceptance[3],NFR2,NFR4: getPositionData answers the single-quoted JS array; since the upstream merge (OpenCCU patch 0054) v1 ends in utcOffset / utcOffsetDST of the host, no longer in the time zone of time.conf} -body {
   set rega {{*system.Longitude()* {['Longitude:8.4','Latitude:49.0'}}}
-  list [result [call system.getPositionData $S -sessions $USER -rega $rega -files [list etc/config/time.conf "TIMEZONE=Europe/Berlin\n"]]] [result [call system.getPositionData $S -sessions $USER -rega $rega]]
-} -result [list {['Longitude:8.4','Latitude:49.0','TimeZone:Europe/Berlin']} {['Longitude:8.4','Latitude:49.0','TimeZone:CET/CEST']}]
-
+  set re {^\['Longitude:8\.4','Latitude:49\.0','utcOffset:-?[0-9]+','utcOffsetDST:-?[0-9]+'\]$}
+  list [regexp $re [result [call system.getPositionData $S -sessions $USER -rega $rega -files [list etc/config/time.conf "TIMEZONE=Europe/Berlin\n"]]]] [regexp $re [result [call system.getPositionData $S -sessions $USER -rega $rega]]]
+} -result {1 1}
 test sp045-5 {NFR3 (frozen v1): a failing ReGa script makes the answer begin with a comma} -body {
-  result [call system.getPositionData $S -sessions $USER]
-} -result {,'TimeZone:CET/CEST']}
+  regexp {^,'utcOffset:-?[0-9]+','utcOffsetDST:-?[0-9]+'\]$} [result [call system.getPositionData $S -sessions $USER]]
+} -result 1
 
 test sp045-6 {acceptance[7] [V2]: getPositionData is a strict JSON array with double quotes} -body {
   result [call system.getPositionData {} -sessions $USER -rega {{*system.Longitude()* {['Longitude:8.4','Latitude:49.0'}}} {*}$::V2]

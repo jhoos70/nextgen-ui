@@ -2,7 +2,7 @@ package require tcltest
 namespace import ::tcltest::*
 
 # The method schema data (schema/methods.json, SP032 acceptance[7], [8], BD-10, BD-15): one entry per
-# registry method (179, including RecoveryMode.enter, without the removed ReGa-version methods) with
+# registry method (182, including RecoveryMode.enter, without the removed ReGa-version methods) with
 # params and result; the required parameters equal the corrected ARGUMENTS list; the locked
 # patterns are enforced centrally with error 403 "invalid argument (<name>)".
 set here [file dirname [file normalize [info script]]]
@@ -41,14 +41,14 @@ test schema-1 {the schema data file exists, is valid JSON and has a version} -bo
   list [json_isValid $c] [expr {$doc(version) ne ""}]
 } -result {1 1}
 
-test schema-2 {exactly 179 entries, the names are the registry names; no ReGa-version methods, one RecoveryMode.enter} -body {
+test schema-2 {exactly 182 entries, the names are the registry names; no ReGa-version methods, one RecoveryMode.enter} -body {
   array set doc [schema]
   set names {}
   foreach m $doc(methods) { array unset e; array set e $m; lappend names $e(name) }
   array set reg [registry]
   list [llength $names] [expr {[lsort $names] eq [lsort [array names reg]]}] \
     [lsearch -exact $names User.getReGaVersion] [lsearch -exact $names User.setReGaVersion] [llength [lsearch -all -exact $names RecoveryMode.enter]]
-} -result {179 1 -1 -1 1}
+} -result {182 1 -1 -1 1}
 
 test schema-3 {every entry has level/info/params/result; level and info equal the registry; required equals the ARGUMENTS list} -body {
   array set doc [schema]

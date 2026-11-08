@@ -12,6 +12,6 @@
 
 admin_audit "restart HmIP server"
 
-exec -- /usr/bin/nohup /etc/init.d/S62HMServer restart >/dev/null &
+exec -- /usr/bin/monit restart HMIPServer >/dev/null &
 
 jsonrpc_response true

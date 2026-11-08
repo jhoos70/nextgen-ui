@@ -57,6 +57,12 @@ char buffer[128];
 #include <errno.h>
 
 #include "generated-rfd-version.h"
+#include "xmlrpc_version.h"
+#include "xmlparser_version.h"
+#include "hsscomm_version.h"
+#include "elvutils_version.h"
+#include "landeviceutils_version.h"
+#include "unifiedlancomm_version.h"
 
 using namespace XmlRpc;
 
@@ -68,10 +74,15 @@ XmlRpcServer s;
 XmlRpcServerProxy serverProxy(&s);
 #endif
 
-static bool run=true;
+static volatile sig_atomic_t run=true;
+
+static void sigterm_handler(int sig)
+{
+	run=false;
+}
 
 
-//#ifdef DEBUG_SHUTDOWN
+#ifdef DEBUG_SHUTDOWN
 // XmlRpc-Methode, die nach Aufruf rfd sauber herunterf�hrt.
 // Sollte aus Sicherheitsgr�nden nur einkompiliert werden, wenn 
 // das Herunterfahren debuggt werden soll.
@@ -86,7 +97,7 @@ public:
 		run=false;
 	}
 }xmlRpcMethodExit(&s);
-//#endif
+#endif
 
 static class CustomXmlRpcLogHandler : public XmlRpcLogHandler {
 public:
@@ -127,6 +138,17 @@ static const char* CONFIG_FILENAMES[] = {
     NULL
 };
 
+static void printVersion()
+{
+  std::cout << "rfd " << RFD_VERSION << " (" << __DATE__ << ")" << std::endl
+            << "  libXmlRpc " << xmlrpc_version() << std::endl
+            << "  libxmlparser " << xmlparser_version() << std::endl
+            << "  libhsscomm " << hsscomm_version() << std::endl
+            << "  libelvutils " << elvutils_version() << std::endl
+            << "  libLanDeviceUtils " << landeviceutils_version() << std::endl
+            << "  libUnifiedLanComm " << unifiedlancomm_version() << std::endl;
+}
+
 static void usage(const char* procname)
 {
   std::cout << "RFD " << RFD_VERSION << " (" << __DATE__ << ")" << std::endl
@@ -146,7 +168,8 @@ static void usage(const char* procname)
             << "    -f: use alternate config file" << std::endl
             << "    -c: log to console instead of syslog" << std::endl
             << "    -l: set log level" << std::endl
-            << "    -s: sniffing mode" << std::endl;
+            << "    -s: sniffing mode" << std::endl
+            << "    -v, --version: show the versions of rfd and its libraries" << std::endl;
 
 	if(logger)
     delete logger;
@@ -195,6 +218,10 @@ int main(int argc, char* argv[])
 	const struct rlimit rl={RLIM_INFINITY, RLIM_INFINITY};
 	setrlimit(RLIMIT_CORE, &rl);
 #endif
+    if(argc == 2 && (strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "--version") == 0)) {
+        printVersion();
+        return 0;
+    }
     for(int i=1;i<argc;i++)
     {
         if(strcmp(argv[i], "-l")==0&&argc>i+1){
@@ -391,6 +418,12 @@ int main(int argc, char* argv[])
     }
 #endif
 
+	//handle SIGTERM and SIGINT only from here on: until now there is nothing to
+	//save, so a signal during startup (e.g. while waiting for a gateway) still
+	//terminates the process at once
+	signal(SIGTERM, sigterm_handler);
+	signal(SIGINT, sigterm_handler);
+
     writeInitDoneFile(config_data);
 
 	while(run ){
@@ -399,7 +432,11 @@ int main(int argc, char* argv[])
 			TimerTarget::s_timerQueue.Execute();
 			timeout=TimerTarget::s_timerQueue.TimeBeforeNextDue();
 		}
-		s.work(timeout);
+		s.work(timeout < 0 || timeout > 1000 ? 1000 : timeout); //wake up at least once a second to notice a shutdown request
+	}
+	//run what is already due, e.g. a device save requested by the last RPC call
+	while(TimerTarget::s_timerQueue.TimeBeforeNextDue() == 0){
+		TimerTarget::s_timerQueue.Execute();
 	}
 
     s.getDispatcher()->removeSource(mgr->GetInterfaceConcentrator());

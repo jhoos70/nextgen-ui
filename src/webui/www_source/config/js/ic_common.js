@@ -208,6 +208,29 @@ SendRequest = function(scriptname, html_container_id, callback)
   new Ajax.Updater(id, scriptname, opt);
 };
 
+SendPOSTRequest = function(scriptname, html_container_id, callback)
+{
+  scriptname = Get_ReGa_Path(scriptname);
+  var params = poststr;
+
+  if ((html_container_id) && (html_container_id !== "")) { id = html_container_id; }
+  else                                                   { id = Get_UI_CONTENTBOX_ID(); }
+
+  var _callback_ = callback; 
+  
+  var opt =
+  {
+    method:'post',
+    parameters:params,
+    evalScripts:true,
+    onComplete: function() { if (_callback_) { _callback_(); } }
+  };
+
+  // pass the session the same way as the page does (sid or icsessionid)
+  var sidElem = document.getElementById('global_sid');
+  new Ajax.Updater(id, scriptname + '?' + sidElem.name + '=' + sidElem.value, opt);
+};
+
 ShowLoadingBox = function(msg)
 {
   
@@ -502,7 +525,7 @@ PrepareDeleteDeviceForm_old = function(iface, sn, devname, devtype)
   poststr += "&devname=" + devname;
   poststr += "&devtype=" + devtype;
 
-  SendRequest('ic_ifacecmd.cgi');
+  SendPOSTRequest('ic_ifacecmd.cgi');
 
   ProgressBar = new ProgressBarMsgBox("Verknüpfungen und Programme werden abgefragt...", 1);
   ProgressBar.show();
@@ -753,7 +776,7 @@ RemoveLink = function(iface, sender_address, receiver_address, sender_type, redi
       if ((redirect_url) && (redirect_url !== "")) { poststr += "&redirect_url=" + redirect_url; }
       else                                         { poststr += "&redirect_url=IC_LINKPEERLIST"; }
 
-      SendRequest('ic_ifacecmd.cgi');
+      SendPOSTRequest('ic_ifacecmd.cgi');
     }
   }, "html");
 };
@@ -822,7 +845,7 @@ CheckConfigPending = function(iface, sender_address, receiver_address, redirect_
   poststr += "&receiver_address=" +receiver_address;
   poststr += "&cmd=ShowConfigPendingMsg";
 
-  SendRequest('ic_ifacecmd.cgi');
+  SendPOSTRequest('ic_ifacecmd.cgi');
 };
 
 
@@ -1015,7 +1038,7 @@ DetermineParameterValue = function(iface, address, ps_id, param_id, html_inputel
   poststr += "&param_id="          + param_id;
   poststr += "&html_inputelem_id=" + html_inputelem_id;
 
-  SendRequest('ic_ifacecmd.cgi');
+  SendPOSTRequest('ic_ifacecmd.cgi');
 
   //ProgressBar = new ProgressBarMsgBox("Parameter wird festgesetzt...", 1);
   ProgressBar = new ProgressBarMsgBox(translateKey("dialogDetermineParameterTitle"), 1);
@@ -1061,61 +1084,72 @@ ProofAndSetValue = function(srcid, dstid, min, max, dstValueFactor, convInt2Floa
     srcElm.value = value;
   }
 
+  var parsedValue;
+  var parsedMin = parseFloat(min);
+  var parsedMax = parseFloat(max);
+
+  var minSplit = min.toString().split(".");
+  var maxSplit = max.toString().split(".");
+  var digits = 0;
+
+  if(minSplit.length === 2) {
+    digits = Math.max(digits, minSplit[1].length);
+  }
+  if(maxSplit.length === 2) {
+    digits = Math.max(digits, maxSplit[1].length);
+  }
+
   // Check if float is allowed
   try {
     if (min.toString().indexOf(".") == -1 && max.toString().indexOf(".") == -1) {
       min = parseInt(min);
       max = parseInt(max);
-      value = (roundValue05(parseInt(value)));
+      value = Math.round(parseFloat(value));
     } else {
-      min = parseFloat(parseFloat(min).toFixed(fixedDecimalPoint));
-      max = parseFloat(parseFloat(max).toFixed(fixedDecimalPoint));
-      value = parseFloat(parseFloat(value).toFixed(fixedDecimalPoint));
+      min = parseFloat(parseFloat(min).toFixed(digits));
+      max = parseFloat(parseFloat(max).toFixed(digits));
+      var roundFactor = Math.pow(10, digits);
+      value = Math.round(parseFloat((parseFloat(value) * roundFactor).toPrecision(12))) / roundFactor;
 
       if (value < min || isNaN(min)) {value = min;} else if (value > max) {value = max;}
-
-      srcElm.value = parseFloat(value);
     }
+    parsedValue = parseFloat(value);
   } catch(e) {conInfo(e);}
 
   if (typeof value == "undefined")
   {
-    finalVal = min;
+    finalVal = parsedMin;
     ok = false;
   }
   else if (isNaN(value))
   {
-    finalVal = min;
+    finalVal = parsedMin;
     ok = false;
   }
-  else if (value < min)
+  else if (parsedValue < parsedMin)
   {
-    finalVal = min;
+    finalVal = parsedMin;
     ok = false;
   }
-  else if (value > max)
+  else if (parsedValue > parsedMax)
   {
-    finalVal = max;
+    finalVal = parsedMax;
     ok = false;
   }
 
   if (ok)
   {
     srcElm.style.backgroundColor = "#fffffe";
-    dstElm.value = value * dstValueFactor;
-    if ((typeof _iface == "undefined") || (_iface != "BidCos-RF")) {
-      srcElm.value = dstElm.value;
-    }
+    dstElm.value = parseFloat((parsedValue.toFixed(digits) * dstValueFactor).toPrecision(12));
+    srcElm.value = parsedValue.toFixed(digits);
     srcElm.setAttribute("valvalid", "true");
   }
   else
   {
     srcElm.setAttribute("valvalid", "false");
     srcElm.style.backgroundColor = "red";
-    dstElm.value = finalVal * dstValueFactor;
-    if ((typeof _iface == "undefined") || (_iface != "BidCos-RF")) {
-      srcElm.value = dstElm.value;
-    }
+    dstElm.value = parseFloat((finalVal.toFixed(digits) * dstValueFactor).toPrecision(12));
+    srcElm.value = finalVal.toFixed(digits);
     window.setTimeout(function(){srcElm.style.backgroundColor = "white";},1000);
   }
 };

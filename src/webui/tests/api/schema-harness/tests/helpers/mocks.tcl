@@ -72,10 +72,14 @@ proc ::mock::readfile {path} {
 }
 
 # Directory that holds src/webui/www/{api,tcl} of the pinned legacy revision.
-proc ::mock::legacy_snapshot {} {
+proc ::mock::legacy_snapshot {} { return [snapshot LEGACY_REV] }
+
+# The same for the base the OpenCCU rootfs patches were written for (PATCH_BASE_REV): the sibling repository pins its own
+# Base revision, which lags behind the upstream revision of LEGACY_REV until it bumps its pin.
+proc ::mock::snapshot {name} {
   variable repo
-  set revfile [file join $repo src webui tests api LEGACY_REV]
-  if {![file exists $revfile]} { error "mock: $revfile is missing (it pins the legacy tree revision)" }
+  set revfile [file join $repo src webui tests api $name]
+  if {![file exists $revfile]} { error "mock: $revfile is missing (it pins a tree revision)" }
   set rev [string trim [readfile $revfile]]
   set base [expr {[info exists ::env(TMPDIR)] ? $::env(TMPDIR) : "/tmp"}]
   set user [expr {[info exists ::tcl_platform(user)] ? $::tcl_platform(user) : "u"}]

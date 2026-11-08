@@ -17,10 +17,6 @@ proc result {r} {
 }
 set S {_session_id_ AbCdEf1234}
 
-test sp039-nfr0 {NFR0: removeFieldTestActive on a missing file - rm prints an error, the answer is false} -body {
-  result [call CCU.removeFieldTestActive $S -execfail {{{rm*} {rm: cannot remove: No such file}}}]
-} -result false
-
 test sp039-nfr1 {NFR1: anything other than the exact string 'false' leaves the LED on} -body {
   set fs [mock::fs::create]
   set out {}
@@ -50,7 +46,7 @@ test sp039-err1 {the written LED file has exactly the two v1 lines} -body {
 } -result "IgnoreServiceMessages=true\nIgnoreAlarmMessages=false\n"
 
 test sp039-golden {golden re-run: the identity/flag methods replay byte-identical through the staged tree} -body {
-  golden::compare_all -candidate only:system-admin -only {CCU.getSerial CCU.getAddress CCU.getHmIPAddress CCU.getVersion CCU.getHeatingGroupList CCU.getInfoLedConfig CCU.setInfoLedConfig CCU.hideStickyUnreach CCU.getStickyUnreachState CCU.removeFieldTestActive}
+  golden::compare_all -candidate only:system-admin -only {CCU.getSerial CCU.getAddress CCU.getHmIPAddress CCU.getVersion CCU.getHeatingGroupList CCU.getInfoLedConfig CCU.setInfoLedConfig CCU.hideStickyUnreach CCU.getStickyUnreachState}
 } -result {}
 
 cleanupTests

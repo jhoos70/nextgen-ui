@@ -46,14 +46,14 @@ test sp034-1 {User.restartLighttpd (ADMIN): /usr/bin/monit restart lighttpd runs
   list [result $r] [dict get $r exec_calls]
 } -result [list true [list {/usr/bin/monit restart lighttpd}]]
 
-test sp034-2 {User.restartHmIPServer / stopHmIPServer / startHmIPServer: nohup S62HMServer <verb> in the background, true} -body {
+test sp034-2 {User.restartHmIPServer / stopHmIPServer / startHmIPServer: monit <verb> HMIPServer in the background, true} -body {
   set out {}
   foreach {m verb} {User.restartHmIPServer restart User.stopHmIPServer stop User.startHmIPServer start} {
     set r [call $m $S -sessions $SESS]
     lappend out [result $r] [lindex [dict get $r exec_calls] 0]
   }
   set out
-} -result [list true {/usr/bin/nohup /etc/init.d/S62HMServer restart >/dev/null &} true {/usr/bin/nohup /etc/init.d/S62HMServer stop >/dev/null &} true {/usr/bin/nohup /etc/init.d/S62HMServer start >/dev/null &}]
+} -result [list true {/usr/bin/monit restart HMIPServer >/dev/null &} true {/usr/bin/monit stop HMIPServer >/dev/null &} true {/usr/bin/monit start HMIPServer >/dev/null &}]
 
 test sp034-3 {CCU.restartReGa / CCU.restartSSHDaemon: 'monit restart <svc>' inside catch, the result is null} -body {
   set a [call CCU.restartReGa $S -sessions $SESS]

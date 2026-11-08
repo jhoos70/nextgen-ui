@@ -12,7 +12,8 @@ source [file join $tests helpers mocks.tcl]
 source [file join $tests helpers patchapply.tcl]
 
 set copyplan [file join $::mock::tests_root PATCH-CONFLICTS.md]
-set allowed_fail {0001 0164 0038 0044 0057 0109 0131 0205}
+# after the upstream merge (87e39a10) most patches are already part of Base (see PATCH-CONFLICTS.md)
+set allowed_fail {0001 0031 0038 0044 0054 0057 0104 0109 0131 0163 0164 0203 0205}
 set patches {0001 0031 0038 0044 0054 0057 0104 0109 0131 0163 0164 0203 0205}
 
 proc patchdir_present {} { return [file isdirectory [patchapply::patchdir]] }
@@ -35,8 +36,8 @@ test patchcompat-4 {only the www/api and www/tcl sections of a patch are applied
   patchapply::filter_sections "--- a/www/api/x.tcl\n+++ b/www/api/x.tcl\n@@ -1 +1 @@\n-a\n+b\n--- a/www/webui/y.js\n+++ b/www/webui/y.js\n@@ -1 +1 @@\n-c\n+d\n--- a/www/tcl/z.tcl\n+++ b/www/tcl/z.tcl\n@@ -1 +1 @@\n-e\n+f\n"
 } -result "--- a/www/api/x.tcl\n+++ b/www/api/x.tcl\n@@ -1 +1 @@\n-a\n+b\n--- a/www/tcl/z.tcl\n+++ b/www/tcl/z.tcl\n@@ -1 +1 @@\n-e\n+f\n"
 
-test patchcompat-5 {legacy tree: all 13 patches apply} -constraints patchdir -body {
-  set tree [patchapply::compose_legacy]
+test patchcompat-5 {the base the patches were written for (PATCH_BASE_REV): all 13 patches apply} -constraints patchdir -body {
+  set tree [patchapply::compose_patchbase]
   set r [patchapply::apply_all $tree]
   file delete -force $tree
   list [patchapply::report $r legacy] [lmap x $r {lindex $x 0}]

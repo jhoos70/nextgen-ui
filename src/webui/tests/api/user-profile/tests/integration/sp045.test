@@ -31,14 +31,14 @@ test sp045-nfr1 {NFR1: a missing key answers the token false (not -1 as the head
   list [result [call system.getTweak [list {*}$S key missing] -sessions $USER -files [list etc/config/tweaks "x = 1\n"]]] [result [call system.getTweak [list {*}$S key x] -sessions $USER -files [list etc/config/tweaks "x = word\n"]]]
 } -result {false word}
 
-test sp045-nfr4 {NFR4: an unreadable time.conf keeps the default CET/CEST (system.TimeZoneOffset() is not used)} -body {
+test sp045-nfr4 {NFR4: the v1 answer does not use system.TimeZoneOffset() (the offsets come from the host clock since the upstream merge)} -body {
   set r [call system.getPositionData $S -sessions $USER -rega {{*system.Longitude()* {['Longitude:1','Latitude:2'}}}]
   set used 0
   foreach line [split [lindex [dict get $r rega_calls] end] \n] {
     if {![string match {!*} [string trim $line]] && [string match *TimeZoneOffset()* $line]} { incr used }
   }
-  list [result $r] $used
-} -result [list {['Longitude:1','Latitude:2','TimeZone:CET/CEST']} 0]
+  list [regexp {^\['Longitude:1','Latitude:2','utcOffset:-?[0-9]+','utcOffsetDST:-?[0-9]+'\]$} [result $r]] $used
+} -result {1 0}
 
 test sp045-err1 {error case: tweak keys with regexp metacharacters or newlines are error 403 and never reach the pattern} -body {
   set out {}

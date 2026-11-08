@@ -185,7 +185,6 @@ system-admin	methods/ccu/getsnmpenabled.tcl	src/webui/www/api/methods/ccu/getsnm
 system-admin	methods/ccu/getsshstate.tcl	src/webui/www/api/methods/ccu/getsshstate.tcl
 system-admin	methods/ccu/getstickyunreachstate.tcl	src/webui/www/api/methods/ccu/getstickyunreachstate.tcl
 system-admin	methods/ccu/getversion.tcl	src/webui/www/api/methods/ccu/getversion.tcl
-system-admin	methods/ccu/removeFieldTestActive.tcl	src/webui/www/api/methods/ccu/removeFieldTestActive.tcl
 system-admin	methods/ccu/restartReGa.tcl	src/webui/www/api/methods/ccu/restartReGa.tcl
 system-admin	methods/ccu/restartsshdaemon.tcl	src/webui/www/api/methods/ccu/restartsshdaemon.tcl
 system-admin	methods/ccu/setauthenabled.tcl	src/webui/www/api/methods/ccu/setauthenabled.tcl

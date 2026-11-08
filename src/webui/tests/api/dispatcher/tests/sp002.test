@@ -29,7 +29,7 @@ test sp002-0 {the staged registry library and the corrected methods.conf exist} 
   list [file exists [file join $gen dispatcher eq3 registry.tcl]] [file exists $CONF]
 } -result {1 1}
 
-test sp002-1 {[TARGET] the corrected registry has exactly 179 unique entries, every one with LEVEL, SCRIPT_FILE, INFO and ARGUMENTS (49 with METHOD_FILE interface/dispatch.tcl)} -body {
+test sp002-1 {[TARGET] the corrected registry has exactly 182 unique entries, every one with LEVEL, SCRIPT_FILE, INFO and ARGUMENTS (49 with METHOD_FILE interface/dispatch.tcl)} -body {
   set reg [dict create]
   set dups 0
   foreach {n b} [readconf $CONF] {
@@ -42,13 +42,13 @@ test sp002-1 {[TARGET] the corrected registry has exactly 179 unique entries, ev
     if {[dict exists $b METHOD_FILE]} { incr mf }
   }
   list [dict size $reg] $dups $missing $mf
-} -result {179 0 0 49}
+} -result {182 0 0 49}
 
-test sp002-2 {[TARGET] level distribution after the deliberate changes: NONE 8, GUEST 48, USER 30, ADMIN 93} -body {
+test sp002-2 {[TARGET] level distribution after the deliberate changes: NONE 8, GUEST 49, USER 31, ADMIN 94} -body {
   set c [dict create NONE 0 GUEST 0 USER 0 ADMIN 0]
   foreach {n b} [readconf $CONF] { dict incr c [dict get $b LEVEL] }
   list [dict get $c NONE] [dict get $c GUEST] [dict get $c USER] [dict get $c ADMIN]
-} -result {8 48 30 93}
+} -result {8 49 31 94}
 
 test sp002-3 {[TARGET] deliberate changes: CCU.createFile ADMIN, Session.logout GUEST, CCU.existsFile stays GUEST} -body {
   array set creg [readconf $CONF]
@@ -75,7 +75,7 @@ test sp002-5 {the unauthenticated surface in the registry is exactly the 8-metho
   "]
 } -result {}
 
-test sp002-6 {registry_load fills METHOD_LIST from methods.conf (name -> LEVEL/SCRIPT_FILE/... list), 179 entries, and writes the cache} -body {
+test sp002-6 {registry_load fills METHOD_LIST from methods.conf (name -> LEVEL/SCRIPT_FILE/... list), 182 entries, and writes the cache} -body {
   set fs [mock::fs::create]
   set r [drv {
     puts [registry_load methods.conf]
@@ -86,7 +86,7 @@ test sp002-6 {registry_load fills METHOD_LIST from methods.conf (name -> LEVEL/S
   set cache [file exists [file join $fs var tmp api_registry.cache]]
   mock::fs::destroy $fs
   list [lines $r] $cache
-} -result [list [list 179 179 "NONE system/methodhelp.tcl name"] 1]
+} -result [list [list 182 182 "NONE system/methodhelp.tcl name"] 1]
 
 test sp002-7 {[TARGET] an unchanged methods.conf is parsed 0 times after the first request: the second load is served from the cache} -constraints unixNotRoot -body {
   set fs [mock::fs::create]
@@ -100,7 +100,7 @@ test sp002-7 {[TARGET] an unchanged methods.conf is parsed 0 times after the fir
   } -fs $fs]
   mock::fs::destroy $fs
   lines $r
-} -result {179 179 179}
+} -result {182 182 182}
 
 test sp002-8 {[TARGET] the cache is rebuilt when methods.conf has a newer mtime} -body {
   set fs [mock::fs::create]
@@ -114,7 +114,7 @@ test sp002-8 {[TARGET] the cache is rebuilt when methods.conf has a newer mtime}
   } -fs $fs]
   mock::fs::destroy $fs
   lines $r
-} -result 180
+} -result 183
 
 test sp002-9 {NFR3 [TARGET]: a missing methods.conf gives an empty registry (every call 401 as in v1)} -body {
   set fs [mock::fs::create]

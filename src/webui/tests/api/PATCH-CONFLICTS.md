@@ -18,6 +18,29 @@ API changes.
   get the correlation-id audit call; the patch hunks cover the whole file and are anchored at its
   start and end, so no line can be added between the replaced lines and the context.
 
+## After the merge of upstream 87e39a10 (2026-11-08)
+
+`LEGACY_REV` moved from `5b8179c4` to the upstream revision that was merged; the patches were written for `5b8179c4`
+(`PATCH_BASE_REV`, which `patchcompat-5` still applies them to: thirteen apply). The sibling repository pins the old Base revision
+until it bumps its pin. Applied to the merged tree, eleven of the thirteen conflict, for two reasons. Seven of them are ALREADY PART OF
+Base (the patch tool reports "Reversed (or previously applied) patch detected"): the sibling retires them when it bumps its pin.
+
+- patch 0031 must be regenerated at the next Base bump: already part of Base (`www/tcl/extern/cgi.tcl`, upload fix).
+- patch 0038 must be regenerated at the next Base bump: already part of Base (`Device.listStatus` in `methods.conf`, `rssiinfo.tcl`).
+- patch 0044 must be regenerated at the next Base bump: already part of Base (`Device.setEnabledServiceMsg`, the `SERVICE_MSG` field of `Device.get` and `Device.listAllDetail`).
+- patch 0057 must be regenerated at the next Base bump: already part of Base (`Interface.getDutyCycle`).
+- patch 0104 must be regenerated at the next Base bump: already part of Base (`device/get.tcl`, `device/listalldetail.tcl`).
+- patch 0203 must be regenerated at the next Base bump: already part of Base (`www/tcl/extern/cgi.tcl`).
+- patch 0205 must be regenerated at the next Base bump: already part of Base (`CCU.removeFieldTestActive` is gone from `methods.conf` and from the tree).
+
+Two conflict with files that this tree also changes, one with a file that moved on:
+
+- patch 0054 must be regenerated at the next Base bump: Base now contains its time zone change (`utcOffset` / `utcOffsetDST` in v1 `system.getPositionData`); the hunk context conflicts with the strict v2 block of `getpositiondata.tcl`.
+- patch 0163 must be regenerated at the next Base bump: `www/tcl/extern/cgi.tcl` was changed upstream around the hunk.
+
+Patches 0001 and 0164 (above) conflict as before. `methods/user/{restart,start,stop}hmipserver.tcl` now run `monit <verb> HMIPServer`, the
+command of patch 0164 / upstream, inside this tree's audited, ADMIN-only wrapper.
+
 The patches 0038, 0044, 0057, 0109, 0131 and 0205 change `methods.conf`. They still apply because
 `methods.conf` differs from the previous version in only seven entries (CCU.createFile,
 Session.logout, Interface.setTeam, ReGa.getAllDatapoints, Channel.setName, Channel.setMode and

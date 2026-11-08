@@ -18,9 +18,9 @@ proc slurp {f} {
 proc valid_utf8 {bin} { return [expr {[encoding convertto utf-8 [encoding convertfrom utf-8 $bin]] eq $bin}] }
 proc count_bare_lf {bin} { return [llength [regexp -all -inline {(?:^|[^\r])\n} $bin]] }
 
-test verbatim-1 {the verbatim set (staged files with a legacy counterpart outside the behaviour-change list) has 129 files} -body {
+test verbatim-1 {the verbatim set (staged files with a legacy counterpart outside the behaviour-change list) has 128 files} -body {
   expr {[llength [legacymap::verbatim_files]] / 2}
-} -result 129
+} -result 128
 
 test verbatim-2 {the behaviour-change list has 79 entries, each exists staged and has a legacy counterpart} -body {
   set n 0; set bad {}

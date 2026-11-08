@@ -26,14 +26,14 @@ set S {_session_id_ AbCdEf1234}
 proc chn {id args} {
   set d [dict create ID $id NAME ch$id ADDRESS NEQ1:$id DEVICE 1234 INDEX $id GROUP_PARTNER_ID 65535 READY_CONFIG true MODE MODE_DEFAULT \
     CATEGORY CATEGORY_NONE USABLE true LOGGED false VISIBLE true LOGABLE true READABLE true WRITABLE false EVENTABLE true AES_AVAILABLE false \
-    VIRTUAL false CHANNEL_TYPE KEY CHANNEL_NAME HM-X]
+    VIRTUAL false INTERNAL false CHANNEL_TYPE KEY CHANNEL_NAME HM-X]
   foreach {k v} $args { dict set d $k $v }
   set s ""
   dict for {k v} $d { append s [list $k $v] " " }
   return [string trimright $s]
 }
 proc dev {id channels} {
-  return [list ID $id NAME "Dev $id" ADDRESS NEQ$id INTERFACE BidCos-RF DEVICE_TYPE HM-X READY_CONFIG true GROUP_ONLY false CHANNELS $channels]
+  return [list ID $id NAME "Dev $id" ADDRESS NEQ$id INTERFACE BidCos-RF DEVICE_TYPE HM-X READY_CONFIG true GROUP_ONLY false SERVICE_MSG true CHANNELS $channels]
 }
 
 test sp025-0 {the staged method scripts of SP025 exist and are complete Tcl} -body {
@@ -74,7 +74,7 @@ test sp025-6 {acceptance[2]: Device.get answers the device with its channels; pa
   set d [dev 1234 [list [chn 1 GROUP_PARTNER_ID 65535] [chn 2 GROUP_PARTNER_ID 77]]]
   set r [call Device.get [list {*}$S id 1234] -sessions $GUEST -rega [list [list {*Write("ID *} $d]]]
   set j [result $r]
-  list [regexp {^\{"id":"1234","name":"Dev 1234","address":"NEQ1234","interface":"BidCos-RF","type":"HM-X","operateGroupOnly":"false","channels":\[} $j] \
+  list [regexp {^\{"id":"1234","name":"Dev 1234","address":"NEQ1234","interface":"BidCos-RF","type":"HM-X","operateGroupOnly":"false","enabledServiceMsg":"true","channels":\[} $j] \
     [regexp {"index":1,"partnerId":"","mode":"MODE_DEFAULT"} $j] [regexp {"index":2,"partnerId":"77"} $j] [regexp {"isReady":true,"isUsable":true,"isVisible":true,"isLogged":false} $j]
 } -result {1 1 1 1}
 
@@ -86,7 +86,7 @@ test sp025-8 {acceptance[1]: Device.listAllDetail builds one object per ready de
   set d [dev 1234 [list [chn 1]]]
   set r [call Device.listAllDetail $S -sessions $GUEST -rega [list [list {*Write("ID *} $d] [list {*EnumIDs()*} {{1234}}]]]
   set j [result $r]
-  list [regexp {^\[\{"id":"1234","name":"Dev 1234","address":"NEQ1234","interface":"BidCos-RF","type":"HM-X","operateGroupOnly":"false","isReady":"true","channels":\[\{"id":"1"} $j] \
+  list [regexp {^\[\{"id":"1234","name":"Dev 1234","address":"NEQ1234","interface":"BidCos-RF","type":"HM-X","operateGroupOnly":"false","isReady":"true","enabledServiceMsg":"true","channels":\[\{"id":"1"} $j] \
     [regexp {"isReady":true,"isUsable"} $j] [regexp {"channelType":"KEY"\}\]\}\]$} $j]
 } -result {1 1 1}
 

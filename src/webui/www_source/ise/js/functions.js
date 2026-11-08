@@ -15,6 +15,8 @@ iseDOM_BuildLabel = "R1.00.0381.0100";
 dbg = false;
 rfr = true;
 
+ID_EDIT_SYSVAR_VALUE   = 9921;
+
 ID_ROOMS     = 101;  // Rooms collection ID.
 ID_FUNCTIONS = 151;  // Functions collection ID.
 ID_FAVORITES = 201;  // Favorites collection ID.
@@ -338,11 +340,31 @@ updateContent = function(file, argsForUrl, codeToExec, bDontSaveUrl)
     if (file.substring(0, UI_PATH.length) == UI_PATH)
     {
       //method: 'get' ist für die ELV-CGIs notwendig.
-      opts = {evalScripts: true, method: 'get', onComplete:function(){iseRefr(true);bUpdateContentRunning=false;}};
+      opts = {
+        evalScripts: true,
+        method: 'get',
+        onComplete:function(){
+          iseRefr(true);
+          bUpdateContentRunning=false;
+          setTimeout(function() {
+            eQ3.HomeMatic.Event.fire({type:'ContentLoaded'});
+          }, 100);
+        }
+      };
     }
     else
     {
-      opts = {postBody: ReGa.encode(pb),evalScripts: true, onComplete:function(){iseRefr(true);bUpdateContentRunning=false;}};
+      opts = {
+        postBody: ReGa.encode(pb),
+        evalScripts: true,
+        onComplete:function(){
+          iseRefr(true);
+          bUpdateContentRunning=false;
+          setTimeout(function() {
+            eQ3.HomeMatic.Event.fire({type:'ContentLoaded'});
+          }, 100);
+        }
+      };
     }
     /* ELV --> */
     
@@ -622,15 +644,25 @@ loadNewLinkPage = function()
 };
 
 setPath = function (path) {
-  var s = "<span onclick='WebUI.enter(StartPage);'>" +translateKey('startPage')+"</span>";
-  if ((path.length > 0) && $("PagePath")) {
-    if ($("PagePath"))$("PagePath").innerHTML = s + " &gt; " + path;
+  var title=document.title;
+  if (title != 'OpenCCU WebUI') {
+    title = '[' + title.escapeHTML() + '] ';
+  } else {
+    title = '';
   }
-  else {
-    if ($("PagePath"))$("PagePath").innerHTML = "<span id='PagePathSpan'>"+translateKey('startPage')+"</span>";
+
+  if ($("PagePath")) {
+    var s = '';
+    if (path.length > 0) {
+      s = "<span onclick='WebUI.enter(StartPage);'>" + title + translateKey('startPage') + "</span>&nbsp;&gt; " + path;
+    } else {
+      s = "<span id='PagePathSpan'>" + title + translateKey('startPage') + "</span>";
+    }
+
+    $("PagePath").innerHTML = s;
+    translatePage("#PagePath");
   }
-  translatePage("#PagePath");
-};
+};  
 
 
 
@@ -678,7 +710,7 @@ buildPropTable= function(id) {
   var opts = {
     evalScripts: true,
     onComplete: function(trans) {
-      window.setTimeout(centerMessageBox, 200);
+      centerMessageBox();
     }
   };
   var url = "/esp/system.htm?sid=" + SessionId + "&action=buildPropTable&id="+id;
@@ -1729,14 +1761,14 @@ convertDomTime = function(s) {
   return arTmp[0]+':'+arTmp[1];
 };
 
-ExecuteProgram = function(dpid)
+ExecuteProgram = function(dpid, thenOnly)
 {
   var url = "/esp/exec.htm?sid=" + SessionId;
   var pb = "";
   pb += "object o = dom.GetObject( "+dpid+" );";
   pb += "if( o )";
   pb += "{";
-  pb += "  o.ProgramExecute();";
+  pb += (thenOnly === true) ? "  o.ProgramExecute();" : "  o.State(1);";
   pb += "}";
   var opts = {postBody: ReGa.encode(pb)};
   if(dbg)alert(pb);
@@ -1893,51 +1925,15 @@ iseArraySwap = function(arr,entryA,entryB)
 iseSortMultiArray = function(arr,dsc,dir,sln, sessionVar,popup)
 {
   conInfo("Sort multi array.");
-  do
-  {
-    var n = arr.length - 1;
-    var bSwapped = false;
-    for(var i=0;i<n;i++)
-    {
-      if( typeof arr[i][dsc] == "undefined" )
-      {
-        arr[i][dsc] = "";
-      }
-      if( typeof arr[i+1][dsc] == "undefined" )
-      {
-        arr[i+1][dsc] = "";
-      }      
-      var item = arr[i][dsc].toLowerCase();
-      item = item.replace("ö", "o");
-      item = item.replace("ä", "a");
-      item = item.replace("ü", "u");
-      item = item.replace("ß", "ss");
-      var nextitem = arr[i+1][dsc].toLowerCase();
-      nextitem = nextitem.replace("ö", "o");
-      nextitem = nextitem.replace("ä", "a");
-      nextitem = nextitem.replace("ü", "u");
-      nextitem = nextitem.replace("ß", "ss");
-      if( dir === 0 )
-      {
-        if( item > nextitem )
-        {
-          iseArraySwap(arr,i,i+1);
-          bSwapped = true;
-        }
-      }
-      else
-      {
-        if( item < nextitem )
-        {
-          iseArraySwap(arr,i,i+1);
-          bSwapped = true;
-        }
-      }
-    }
-  } while( bSwapped );
-    
+  const collator = new Intl.Collator(undefined, {numeric: true, sensitivity: 'base'});
+  // a missing (undefined or null) value sorts as an empty string; the stable sort keeps rows with equal values in order in both directions
+  var order = (dir === 1) ? -1 : 1;
+  arr.sort( (x, y) => {
+    var a = (x[dsc] == null) ? "" : String(x[dsc]);
+    var b = (y[dsc] == null) ? "" : String(y[dsc]);
+    return order * collator.compare(a, b);
+  } );
   if (!popup) iseTransferSortedArray(arr,dsc,sln, sessionVar);
-  
 };
 
 iseTransferSortedArray = function(arr,dsc,sortListNumber, sessionVar)
@@ -2575,79 +2571,121 @@ changeRoomOrSubsection = function(id)
 };
 
 
+var dutyCycleRequestId = 0;
+
 showDutyCycle = function() {
-  if (jQuery("#PagePathSpan").text() == translateKey("startPage")) {
+  if (jQuery("#PagePathSpan").text().endsWith(translateKey("startPage"))) {
     var ifaceBidCosRF = "BidCos-RF",
       ifaceHmIPRF = "HmIP-RF",
       arInterfaceDutyCycle = {},
+      arInterfaceCarrierSense = {},
       showPartingLine = false,
       dcUnit = "%",
       dcNotAvailable = -1,
-      dcAlarm = 89;  // Attention when dc >= 90%
+      csNotAvailable = -1,
+      dcWarn  = 69,  // Warning when dc >= 70%
+      dcAlarm = 89,  // Attention when dc >= 90%
+      csWarn  = 10,  // Warning when cs >= 11%
+      csAlarm = 19;  // Attention when cs >= 20%
 
-    homematic("Interface.listBidcosInterfaces", {"interface": ifaceBidCosRF}, function (BidCosIFaces) {
-      if (BidCosIFaces) {
-        var linkElem = jQuery("#iFaceShowAll");
-        if ((BidCosIFaces.length > 1) && (!linkElem.hasClass("UILink"))) {
-          linkElem
-            .addClass("UILink")
-            .on("click", function () {
-              showDutyCycle(); // actualize the dc value of the start page
-              showDCAllInterfaces();
-            });
-        }
+    var requestId = ++dutyCycleRequestId;
+    homematic("Interface.getDutyCycle", {}, function(dcArray) {
+      // ignore the response of a request that a newer one has superseded
+      if (requestId !== dutyCycleRequestId) { return; }
+      if(jQuery.isArray(dcArray)) {
+        jQuery.each(dcArray, function(index, iface) {
+          var dutyCycleValElm = jQuery("#dutyCycleVal"+index),
+            dutyCycleAddrElm = jQuery("#dutyCycleAddr"+index),
+            trDutyCycle = jQuery("[name='trDutyCycle"+index+"']"),
+            dutyCycleBar = jQuery("[name='dutyCycleBar"+index+"']"),
+            carrierSenseValElm = jQuery("#carrierSenseVal"+index),
+            carrierSenseBar = jQuery("[name='carrierSenseBar"+index+"']"),
+            carrierSenseCol = jQuery("[name='carrierSenseCol"+index+"']"),
+            trPartingLineElm = jQuery("#partingLine0, #partingLine1"),
+            csVal,
+            dcVal;
 
-        jQuery.each(BidCosIFaces, function (index, iFace) {
-          if (iFace.type == "CCU2") {
-            var dutyCycleProgressElem = jQuery("#dutyCycleProgress"),
-              dutyCycleProgressBarElm = jQuery("#dutyCycleProgressBar"),
-              dutyCycleValElm = jQuery("#dutyCycleVal"),
-              trDutyCycle = jQuery("[name='trDutyCycle']"),
-              trPartingLineElm = jQuery("#partingLine1"),
-              dcVal,
-              width, value;
+          if (typeof iface.dutyCycle !== "undefined") {
+            dcVal = Math.floor(iface.dutyCycle);
+            csVal = Math.floor(iface.carrierSense);
+            conInfo("dutyCycle - " + ifaceBidCosRF + ": " + dcVal + " " + dcUnit);
+            conInfo("carrierSense - " + ifaceBidCosRF + ": " + csVal + " " + dcUnit);
+            arInterfaceDutyCycle[ifaceBidCosRF] = ((dcVal >= 0) && (dcVal <= 100)) ? dcVal : dcNotAvailable;
+            arInterfaceCarrierSense[ifaceBidCosRF] = ((csVal >= 0) && (csVal <= 100)) ? csVal : csNotAvailable;
+          } else {
+            conInfo("No gateway status for the interface " + ifaceBidCosRF + " available!");
+            arInterfaceDutyCycle[ifaceBidCosRF] = dcNotAvailable;
+          }
 
-            if (typeof iFace.dutyCycle != "undefined") {
-              dcVal = parseInt(iFace.dutyCycle);
-              conInfo("dutyCycle - " + ifaceBidCosRF + ": " + dcVal + dcUnit);
-              arInterfaceDutyCycle[ifaceBidCosRF] = ((dcVal >= 0) && (dcVal <= 100)) ? dcVal : dcNotAvailable;
-            } else {
-              conInfo("No gateway status for the interface " + ifaceBidCosRF + " available!");
-              arInterfaceDutyCycle[ifaceBidCosRF] = dcNotAvailable;
-            }
-
-            if (arInterfaceDutyCycle[ifaceBidCosRF] != dcNotAvailable) {
-              dutyCycleValElm.text(arInterfaceDutyCycle[ifaceBidCosRF] + dcUnit);
-
-              width = parseInt(dutyCycleProgressElem.css("width"));
-              value = width - (width / 100 * arInterfaceDutyCycle[ifaceBidCosRF]);
-
-              window.setTimeout(function () {
-                //dutyCycleProgressBarElm.css("width", value + "px");
-                dutyCycleProgressBarElm.css("margin-left", (width - parseInt(value)) + "px");
-
-              }, 25);
-
-              if (arInterfaceDutyCycle[ifaceBidCosRF] > dcAlarm) {
-                trDutyCycle.addClass("attention");
+          if (arInterfaceDutyCycle[ifaceBidCosRF] != dcNotAvailable) {
+            dutyCycleValElm.text(arInterfaceDutyCycle[ifaceBidCosRF] + " " + dcUnit);
+            if (iface.type === "CCU2") {
+              dutyCycleAddrElm.text("CCU:");
+            } else if(iface.type === "HMIP-HAP") {
+              if(iface.name !== "") {
+                dutyCycleAddrElm.text("HAP ("+iface.name+"):");
               } else {
-                trDutyCycle.removeClass("attention");
+                dutyCycleAddrElm.text("HAP ("+iface.address+"):");
               }
-              trPartingLineElm.show();
-              showPartingLine = true;
-              trDutyCycle.css("visibility", "visible");
+            } else if(iface.name !== "") {
+              dutyCycleAddrElm.text("LGW ("+iface.name+"):");
             } else {
-              trDutyCycle.css("visibility", "hidden");
+              dutyCycleAddrElm.text("LGW ("+iface.address+"):");
             }
 
-            if (!showPartingLine) {
-              trPartingLineElm.hide();
+            dutyCycleBar.css("width", arInterfaceDutyCycle[ifaceBidCosRF]+"%").attr('aria-valuenow', arInterfaceDutyCycle[ifaceBidCosRF]);
+            dutyCycleBar.removeClass("bg-success");
+            dutyCycleBar.removeClass("bg-warning");
+            dutyCycleBar.removeClass("bg-danger");
+
+            if (arInterfaceDutyCycle[ifaceBidCosRF] > dcAlarm) {
+              dutyCycleBar.addClass("bg-danger");
+            } else if (arInterfaceDutyCycle[ifaceBidCosRF] > dcWarn) {
+              dutyCycleBar.addClass("bg-warning");
+            } else {
+              dutyCycleBar.addClass("bg-success");
             }
-            return false; // Leave each loop
+
+            if (arInterfaceCarrierSense[ifaceBidCosRF] != csNotAvailable) {
+              carrierSenseValElm.text(arInterfaceCarrierSense[ifaceBidCosRF] + " " + dcUnit);
+              carrierSenseBar.css("width", arInterfaceCarrierSense[ifaceBidCosRF]+"%").attr('aria-valuenow', arInterfaceCarrierSense[ifaceBidCosRF]);
+              carrierSenseBar.removeClass("bg-info");
+              carrierSenseBar.removeClass("bg-warning");
+              carrierSenseBar.removeClass("bg-danger");
+
+              if (arInterfaceCarrierSense[ifaceBidCosRF] > csAlarm) {
+                carrierSenseBar.addClass("bg-danger");
+              } else if (arInterfaceCarrierSense[ifaceBidCosRF] > csWarn) {
+                carrierSenseBar.addClass("bg-warning");
+              } else {
+                carrierSenseBar.addClass("bg-info");
+              }
+            } else {
+              carrierSenseValElm.text("n/a");
+              carrierSenseBar.css("width", "0%").removeAttr("aria-valuenow");
+            }
+            trPartingLineElm.show();
+            showPartingLine = true;
+            trDutyCycle.css("display", "table-row");
+          } else {
+            trDutyCycle.css("display", "none");
+          }
+
+          if (!showPartingLine) {
+            trPartingLineElm.hide();
           }
         });
+
+        // hide the rows of interfaces that are missing in this response
+        jQuery("[name^='trDutyCycle']").each(function() {
+          if (parseInt(jQuery(this).attr("name").substr(11), 10) >= dcArray.length) {
+            jQuery(this).css("display", "none");
+          }
+        });
+        if (!showPartingLine) {
+          jQuery("#partingLine0, #partingLine1").hide();
+        }
       }
-      showDutyCycleHmIP();
     });
   }
 };
@@ -2655,7 +2693,7 @@ showDutyCycle = function() {
 showDutyCycleHmIP = function() {
   // Currently only in use for HAPs. Here we collect the available HAP addresses.
   // The display of the HAP-DutyCycle is done in showDCAllInterfaces()
-  if (jQuery("#PagePathSpan").text() == translateKey("startPage")) {
+  if (jQuery("#PagePathSpan").text().endsWith(translateKey("startPage"))) {
     var linkElem = jQuery("#iFaceShowAll"),
       arRelevantAddresses = [];
 
@@ -2680,7 +2718,7 @@ showDutyCycleHmIP = function() {
 
 //Attention: To work properly Adapter.Local.Device.Enabled of the crRFD.conf must be set to true
 showCarrierSense = function() {
-  if (jQuery("#PagePathSpan").text() == translateKey("startPage")) {
+  if (jQuery("#PagePathSpan").text().endsWith(translateKey("startPage"))) {
     var ccuAddress = homematic("CCU.getSerial"),
       linkElem = jQuery("#lblCarrierSense"),
       arHAPAddresses = [];
@@ -3865,51 +3903,20 @@ getDualWhiteControllerDiagramURLs = function() {
   }
 };
 
-getTimeZoneDefinition = function(timeZone) {
-  var tz = [];
-  tz["ACST"] = [9.5, 9.5];
-  tz["ACST/ACDT"] = [9.5, 10.5];
-  tz["AEST"] = [10, 10];
-  tz["AEST/AEDT"] = [10, 11];
-  tz["AKST/AKDT"] = [-9, -8];
-  tz["AST/ADT"] = [-4, -3];
-  tz["AWST/AWDT"] = [8, 9];
-  tz["BRST/BRDT"] = [-3, -2];
-  tz["CET/CEST"] = [1, 2];
-  tz["CST"] = [-6, -6];
-  tz["CST/CDT"] = [-6, -5];
-  tz["EET/EEST"] = [2, 3];
-  tz["EST/EDT"] = [-5, -4];
-  tz["GMT/BST"] = [0, 1];
-  tz["GMT/IST"] = [0, 1];
-  tz["HAW"] = [-10, -10];
-  tz["HKT"] = [8, 8];
-  tz["MSK/MSD"] = [3, 4];
-  tz["RMST/RMDT"] = [3, 4];
-  tz["MST"] = [-7, -7];
-  tz["MST/MDT"] = [-7, -6];
-  tz["NST/NDT"] = [-3.5, -2.5];
-  tz["NZST/NZDT"] = [12, 13];
-  tz["PST/PDT"] = [-8, -7];
-  tz["SGT"] = [8, 8];
-  tz["ULAT/ULAST"] = [8, 9];
-  tz["WET/WEST"] = [0, 1];
-  tz["WIB"] = [7, 7];
-  return tz[timeZone];
-};
-
-getUTCOffset = function(tz) {
-  return getTimeZoneDefinition(tz);
-};
-
-setPositionAllDevices = function(lon, lat, timeZone) {
+setPositionAllDevices = function() {
   if (ConfigData.isPresent) {
 
-    var arUtcOffset = [];
-    arUtcOffset = getUTCOffset(timeZone);
-
-    var utcOffset = arUtcOffset[0] * 60,
-      utcOffsetDST = arUtcOffset[1] * 60;
+  homematic("system.getPositionData", {}, function(posData, error) {
+    // The position is saved already, only the devices could not be updated.
+    if (!posData || (posData.length < 4)) {
+      conInfo("system.getPositionData failed, the devices were not updated");
+      MessageBox.show(translateKey("Info"), translateKey("dialogSettingsTimePositionMessageSetPositionDevicesFailure") + String((error && error.message) || "").escapeHTML());
+      return;
+    }
+    var lon = posData[0].split(":")[1],
+      lat = posData[1].split(":")[1],
+      utcOffset = posData[2].split(":")[1],
+      utcOffsetDST = posData[3].split(":")[1];
 
     jQuery.each(DeviceList.devices, function (index, device) {
       var iFace = device.interfaceName;
@@ -3917,7 +3924,7 @@ setPositionAllDevices = function(lon, lat, timeZone) {
         // Check if the device has the channel *_WEEK_PROFILE
         jQuery.each(device.channels, function (index, channel) {
           if (channel.channelType.indexOf("_WEEK_PROFILE") != -1) {
-            conInfo("Set the position of this device: " + channel.address.split(":")[0] + ":0 - lon: " + lon + " - lat: " + lat + " - utcOffset: " + utcOffset + " - utcOffsetDST: " + utcOffsetDST );
+            conInfo("Set utcOffsets+position of this device: " + channel.address.split(":")[0] + ":0 - lon: " + lon + " - lat: " + lat + " - utcOffset: " + utcOffset + " - utcOffsetDST: " + utcOffsetDST );
 
             homematic("Interface.putParamset", {
               'interface': iFace,
@@ -3934,7 +3941,7 @@ setPositionAllDevices = function(lon, lat, timeZone) {
               conInfo(result);
             });
           } else if (channel.channelType == "HEATING_CLIMATECONTROL_TRANSCEIVER") {
-            conInfo("Set the position of this device: " + channel.address.split(":")[0] + ":0 - lon: " + lon + " - lat: " + lat + " - utcOffset: " + utcOffset + " - utcOffsetDST: " + utcOffsetDST );
+            conInfo("Set utcOffsets of this device: " + channel.address.split(":")[0] + ":0 - utcOffset: " + utcOffset + " - utcOffsetDST: " + utcOffsetDST );
 
             homematic("Interface.putParamset", {
               'interface': iFace,
@@ -3952,12 +3959,13 @@ setPositionAllDevices = function(lon, lat, timeZone) {
         });
       }
     });
+  });
   } else {
     window.setTimeout(function() {
       conInfo("ConfigData.isPresent: " + ConfigData.isPresent);
       counterSetPosition++;
       if (counterSetPosition < 30) {
-        setPositionAllDevices(lon, lat, timeZone);
+        setPositionAllDevices();
       }
     }, 2500);
   }
@@ -3965,11 +3973,15 @@ setPositionAllDevices = function(lon, lat, timeZone) {
 
 setNewDevicePos2SystemPos = function(oDevice) {
   homematic("system.getPositionData", {}, function(posData) {
+    // Without position data the device keeps its own position.
+    if (!posData || (posData.length < 4)) {
+      conInfo("system.getPositionData failed, the position of " + oDevice.sn + " was not set");
+      return;
+    }
     var lon = posData[0].split(":")[1],
       lat = posData[1].split(":")[1],
-      arUtcOffset = getUTCOffset(posData[2].split(":")[1]),
-      utcOffset = arUtcOffset[0] * 60,
-      utcOffsetDST = arUtcOffset[1] * 60;
+      utcOffset = posData[2].split(":")[1],
+      utcOffsetDST = posData[3].split(":")[1];
 
     var iFace = oDevice.iface;
     if (iFace.toLowerCase() == "hmip-rf" && (oDevice.type.toLowerCase() != "hmip-rcv-50") && (oDevice.type.toLowerCase() != "hmip-dld") && (oDevice.type.toLowerCase() != "hmip-dld-a") && (oDevice.type.toLowerCase() != "hmip-dld-s")) {
@@ -4065,22 +4077,6 @@ setColorWebUI = function() {
   dlg.run();
   dlg.resetHeight();
 };
-
-function activateDeviceBetaFw() {
-  var showBetaDevFw = jQuery("#inputShowBetaFw").is(":checked"),
-    fieldTestActive = "/etc/config/fieldTestActive";
-
-  if (showBetaDevFw) {
-    if (! homematic('CCU.existsFile', {'file': fieldTestActive})) {
-      homematic("CCU.createFile", {'file': fieldTestActive});
-    }
-  } else {
-    if (homematic('CCU.existsFile', {'file': fieldTestActive})) {
-      homematic("CCU.removeFieldTestActive");
-    }
-  }
-};
-
 
 /**
  *

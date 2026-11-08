@@ -56,7 +56,7 @@ test sp009-nfr3 {NFR3: /var/tmp not writable -> file_save does nothing, XML pars
   list [string trim [dict get $a body]] [string trim [dict get $b body]] [llength [glob -nocomplain -directory [file join $fs var tmp] *]]
 } -cleanup { file attributes [file join $fs var tmp] -permissions 0755; mock::fs::destroy $fs } -result {{BidCos-RF=PORT 2001 URL xmlrpc_bin://127.0.0.1:2001 INFO BidCos-RF} {BidCos-RF=PORT 2001 URL xmlrpc_bin://127.0.0.1:2001 INFO BidCos-RF} 0}
 
-test sp009-nfr4 {NFR4: INTERFACE_LIST is consumed only by listinterfaces.tcl, interface/dispatch.tcl and device/haslinksorprograms.tcl} -body {
+test sp009-nfr4 {NFR4: INTERFACE_LIST is consumed only by listinterfaces.tcl, interface/dispatch.tcl, device/haslinksorprograms.tcl and (new upstream, Device.listStatus) device/liststatus.tcl} -body {
   set root [golden::root only:interface-gateway]
   set hits {}
   foreach f [split [exec find [file join $root api methods] -name *.tcl -type f] \n] {
@@ -64,7 +64,7 @@ test sp009-nfr4 {NFR4: INTERFACE_LIST is consumed only by listinterfaces.tcl, in
     if {[string match *INTERFACE_LIST* $c]} { lappend hits [string range $f [expr {[string length $root] + 5}] end] }
   }
   lsort $hits
-} -result {methods/device/haslinksorprograms.tcl methods/interface/dispatch.tcl methods/interface/listinterfaces.tcl}
+} -result {methods/device/haslinksorprograms.tcl methods/device/liststatus.tcl methods/interface/dispatch.tcl methods/interface/listinterfaces.tcl}
 
 test sp009-nfr5 {NFR5 [TARGET]: ipc_getInterfaces is not executed for a method that does not use INTERFACE_LIST (lazy resolution, staged dispatcher)} -constraints dispatcherStaged -body {
   set fs [newfs [list etc/config/InterfacesList.xml $XML]]

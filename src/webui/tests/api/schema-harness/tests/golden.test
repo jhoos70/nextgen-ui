@@ -9,20 +9,20 @@ set here [file dirname [file normalize [info script]]]
 source [file join $here helpers mocks.tcl]
 source [file join $here helpers golden.tcl]
 
-test golden-registry-1 {the registry parser returns all 179 entries with LEVEL, SCRIPT_FILE and ARGUMENTS} -body {
+test golden-registry-1 {the registry parser returns all 182 entries with LEVEL, SCRIPT_FILE and ARGUMENTS} -body {
   set reg [golden::registry]
   set bad {}
   dict for {name e} $reg {
     foreach k {LEVEL SCRIPT_FILE ARGUMENTS INFO} { if {![dict exists $e $k]} { lappend bad $name:$k } }
   }
   list [dict size $reg] $bad
-} -result {179 {}}
+} -result {182 {}}
 
-test golden-registry-2 {level distribution of the v1 registry (HEAD 1651075b, BD-15) is NONE 9, GUEST 48, USER 30, ADMIN 92} -body {
+test golden-registry-2 {level distribution of the v1 registry (upstream 87e39a10) is NONE 9, GUEST 49, USER 31, ADMIN 93} -body {
   set c [dict create]
   dict for {name e} [golden::registry] { dict incr c [dict get $e LEVEL] }
   list [dict get $c NONE] [dict get $c GUEST] [dict get $c USER] [dict get $c ADMIN]
-} -result {9 48 30 92}
+} -result {9 49 31 93}
 
 test golden-registry-3 {the re-baselined registry has RecoveryMode.enter (ADMIN, _session_id_) and no ReGa-version methods} -body {
   set reg [golden::registry]
@@ -43,7 +43,7 @@ test golden-seed-1 {a fixture exists for every registry method; its request name
     foreach k {request mock_script} { if {![dict exists $fx $k]} { lappend missing $m:$k } }
   }
   list $n $missing
-} -result {179 {}}
+} -result {182 {}}
 
 test golden-seed-2 {the fixture name follows Namespace.method.json} -body {
   golden::fixture_filename Interface.getParamset
@@ -94,7 +94,7 @@ test golden-diff-3 {different lengths are reported} -body {
   golden::diff abc abcd
 } -result {first difference at byte 3: "" vs "d"}
 
-test golden-all-1 {every one of the 179 seeded fixtures replays through the as-is stub into a JSON-RPC envelope} -body {
+test golden-all-1 {every one of the 182 seeded fixtures replays through the as-is stub into a JSON-RPC envelope} -body {
   set bad {}
   foreach fx [golden::fixtures] {
     set out [golden::capture $fx]
