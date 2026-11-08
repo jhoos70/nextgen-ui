@@ -149,3 +149,6 @@ export const describeDelay = (a: LogicAction, t: Translate): string => (a.delayT
 
 /** Anything this view cannot show as ReGa holds it (it will open read-only in the editor later). */
 export const isUnsupportedCondition = (c: LogicCondition): boolean => c.kind === "unknown" || (c.kind !== "time" && ![1, 5, 6, 7, 8, 9, 10, 11, 12].includes(c.test));
+
+/** Can an else part be added: the rules end in one that has conditions (a program that has one already, or none at all, cannot). */
+export const canAddElse = (rules: { hasCondition: boolean }[]): boolean => rules.length > 0 && rules[rules.length - 1].hasCondition;

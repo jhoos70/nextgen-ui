@@ -66,6 +66,9 @@ def main():
                 rules["1"][0]["actions"].append(act(18, 4, "1", "99999", "Gone.DP"))
             return route.fulfill(**ok(logic(next(p for p in progs if p["id"] == pid))))
         body = json.loads(req.post_data); puts.append(body)
+        if req.method == "POST" and body.get("addElse"):
+            rules[body["id"]].append({"hasCondition": False, "stopDelays": True, "groups": [], "actions": []})
+            return route.fulfill(**ok(logic(next(p for p in progs if p["id"] == body["id"]))))
         if st["refuse"]:
             return route.fulfill(status=422, content_type="application/json", body=json.dumps({"error": {"code": 403, "message": "invalid argument (actions[0].value)"}}))
         # apply: the actions come back as the logic reads them
@@ -153,6 +156,32 @@ def main():
             ed.get_by_role("alert").filter(has_text="not").or_(ed.get_by_role("alert").filter(has_text="invalid")).first.wait_for(timeout=10000)
             check("a refusal is told in the dialog, which stays open", ed.is_visible() and ed.get_by_role("button", name="OK").is_enabled())
             st["refuse"] = False
+            ed.get_by_role("button", name="Cancel").click(); pg.wait_for_function("document.querySelectorAll('[role=dialog]').length === 1")
+            pg.get_by_role("dialog").first.get_by_role("button", name="OK").click()
+
+            # the else part: absent when there is one, asks first for an active program, then appears with its own Edit actions
+            pg.get_by_role("button", name="Manage: Rollo morgens", exact=True).click(); pg.get_by_role("menuitem", name="Logic", exact=True).click()
+            d1 = pg.get_by_role("dialog").first; d1.get_by_role("button", name="Edit actions: Then").wait_for()
+            check("a program that has an else part offers no way to add one", d1.get_by_role("button", name="Add an else part").count() == 0)
+            d1.get_by_role("button", name="OK").click()
+            pg.get_by_role("button", name="Manage: Heizung abends", exact=True).click(); pg.get_by_role("menuitem", name="Logic", exact=True).click()
+            d1 = pg.get_by_role("dialog").first; d1.get_by_role("button", name="Add an else part").wait_for()
+            check("a program without one has no Else section yet", d1.get_by_text("Else", exact=True).count() == 0 and d1.get_by_role("button", name="Edit actions: Else").count() == 0)
+            n0 = len(puts)
+            d1.get_by_role("button", name="Add an else part").click()
+            cf = pg.get_by_role("dialog").last
+            check("an active program asks first and says it can run at once", "Add an else part?" in cf.inner_text() and "can run at once" in cf.inner_text() and len(puts) == n0 and cf.get_by_role("button", name="Cancel").evaluate("e => e === document.activeElement"))
+            cf.get_by_role("button", name="Cancel").click(); pg.wait_for_function("document.querySelectorAll('[role=dialog]').length === 1")
+            check("Cancel adds nothing", len(puts) == n0)
+            d1.get_by_role("button", name="Add an else part").click()
+            pg.get_by_role("dialog").last.get_by_role("button", name="Add an else part", exact=True).click()
+            pg.get_by_text("The else part of Heizung abends was added.").wait_for(timeout=10000)
+            check("adding sends {id, addElse}", puts[-1] == {"id": "2", "addElse": True}, json.dumps(puts[-1]))
+            d1 = pg.get_by_role("dialog").first
+            check("the else part appears with its own Edit actions, and the button goes", d1.get_by_role("button", name="Edit actions: Else").is_visible() and d1.get_by_role("button", name="Add an else part").count() == 0)
+            d1.get_by_role("button", name="Edit actions: Else").click()
+            ed = pg.get_by_role("dialog").last; ed.get_by_role("button", name="Add action").wait_for(timeout=10000)
+            check("the new else part opens empty in the actions editor", ed.get_by_text("No actions yet.").is_visible())
             ed.get_by_role("button", name="Cancel").click(); pg.wait_for_function("document.querySelectorAll('[role=dialog]').length === 1")
             pg.get_by_role("dialog").first.get_by_role("button", name="OK").click()
 

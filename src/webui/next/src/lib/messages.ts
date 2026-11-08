@@ -345,6 +345,10 @@ export const en = {
   condSaved: "The conditions of {name} were saved.",
   errCondValue2: "The upper end must be a number that is not smaller than the lower end.",
   errCondTest: "This comparison does not fit the target.",
+  logicAddElse: "Add an else part",
+  logicAddElseTitle: "Add an else part?",
+  logicAddElseWarning: "The else part runs when the conditions above are not met. It starts empty. This program is active: putting it back makes the CCU check its conditions again, and it can run at once.",
+  logicElseAdded: "The else part of {name} was added.",
   // reading the logic of a program
   logicShow: "Logic",
   logicTitle: "Logic of {name}",
@@ -894,6 +898,10 @@ export const de: Record<MessageKey, string> = {
   condSaved: "Die Bedingungen von {name} wurden gespeichert.",
   errCondValue2: "Das obere Ende muss eine Zahl sein, die nicht kleiner ist als das untere.",
   errCondTest: "Dieser Vergleich passt nicht zum Ziel.",
+  logicAddElse: "Sonst-Teil hinzufügen",
+  logicAddElseTitle: "Sonst-Teil hinzufügen?",
+  logicAddElseWarning: "Der Sonst-Teil läuft, wenn die Bedingungen darüber nicht erfüllt sind. Er beginnt leer. Dieses Programm ist aktiv: beim Zurücksetzen prüft die CCU seine Bedingungen erneut und es kann sofort laufen.",
+  logicElseAdded: "Der Sonst-Teil von {name} wurde hinzugefügt.",
   // reading the logic of a program
   logicShow: "Logik",
   logicTitle: "Logik von {name}",

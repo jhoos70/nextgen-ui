@@ -15,6 +15,9 @@
 # Program management (ADMINISTRATORS only, HTTP 403 for anyone else; the classic "Programs and connections" list):
 #   POST   {"create":true,"name","description"?}   creates an EMPTY program (no condition, no action), switched off:
 #                             {"id","name","description","isActive":false,"isVisible":true,"isOperable":false}
+#   POST   {"id","addElse":true}                  adds the "else" part (no conditions, no actions yet) to a program whose last rule has
+#                             conditions; HTTP 422 (addElse) when it has one already. Written on a working copy like the
+#                             conditions; the answer is the program as GET gives it. Fill it with PUT {rule, actions}.
 #   POST   {"id","copy":true,"name"}               copies a program under a new name (switched off, whatever the original is)
 #   PUT    {"id","name"?,"description"?,"isVisible"?,"isOperable"?}   changes the given fields; the answer holds all four as
 #                             ReGa has them afterwards. "isOperable" is the full access of users who are not administrators.
@@ -943,6 +946,62 @@ proc programs_planConditions { cond structure } {
 }
 
 ##
+# The working-copy scripts of the writers that change the structure of a program (conditions, else part): make a copy of the
+# program, put the copy back over the original in one step, delete a copy. The commit and the abort only ever touch an object
+# that is a COPY of the program, never the program itself.
+##
+set PROGRAM_COPY_BEGIN {
+  string i;
+  foreach(i, dom.GetObject(ID_PROGRAMS).EnumIDs())
+  {
+    if (i == progId)
+    {
+      var p = dom.GetObject(i);
+      if (p)
+      {
+        var c = p.ProgramCopyTo();
+        if (c) { Write("COPY {" # c.ID() # "} DONE {true}"); }
+      }
+    }
+  }
+}
+
+set PROGRAM_COPY_COMMIT {
+  var c = dom.GetObject(copyId);
+  var p = dom.GetObject(progId);
+  boolean ok = false;
+  if (c)
+  {
+    if (p)
+    {
+      if ((c.ProgramCopyID() != ID_ERROR) && (c.ID() != p.ID()))
+      {
+        boolean wasActive = p.Active();
+        c.ProgramCopyTo(p.ID());
+        dom.DeleteObject(c.ID());
+        p.ProgramCopyID(ID_ERROR);
+        p.ProgramUpdate();
+        p.Active(wasActive);
+        ok = true;
+      }
+    }
+  }
+  Write("DONE {" # ok # "}");
+}
+
+set PROGRAM_COPY_ABORT {
+  var c = dom.GetObject(copyId);
+  if (c)
+  {
+    if (c.IsTypeOf(OT_PROGRAM))
+    {
+      if ((c.ProgramCopyID() != ID_ERROR) && (c.ID() != progId.ToInteger())) { dom.DeleteObject(c.ID()); }
+    }
+  }
+  Write("DONE {true}");
+}
+
+##
 # One operation on the working copy (a ReGa script with its variables): the answer of the script, or "" when ReGa did not
 # report DONE true.
 ##
@@ -965,33 +1024,25 @@ proc programs_condOp { script copy rule args } {
 # over the original in one step. Any failure deletes the copy and leaves the original as it was. Returns 1 on success.
 ##
 proc programs_applyConditions { id rule structure plan } {
-  set begin {
-    string i;
-    foreach(i, dom.GetObject(ID_PROGRAMS).EnumIDs())
-    {
-      if (i == progId)
-      {
-        var p = dom.GetObject(i);
-        if (p)
-        {
-          var c = p.ProgramCopyTo();
-          if (c) { Write("COPY {" # c.ID() # "} DONE {true}"); }
-        }
-      }
-    }
-  }
+  global PROGRAM_COPY_BEGIN PROGRAM_COPY_COMMIT PROGRAM_COPY_ABORT
   set op {
     var c = dom.GetObject(copyId);
     boolean ok = false;
     if (c)
     {
       integer k = 0;
+      integer total = 0;
       integer want = ruleIdx.ToInteger();
       object r = c.Rule();
       while (r)
       {
         if (k == want)
         {
+          if (opName == "addElse")
+          {
+            object sub = r.RuleSubRule();
+            if (!sub) { sub = r.RuleCreateSubRule(); if (sub) { ok = true; } }
+          }
           if (opName == "addGroup")
           {
             object ng = r.RuleAddCondition();
@@ -1072,49 +1123,18 @@ proc programs_applyConditions { id rule structure plan } {
             ok = true;
           }
         }
+        total = total + 1;
         r = r.RuleSubRule();
         k = k + 1;
       }
+      if (opName == "ruleCount") { Write("RULES {" # total # "} "); ok = true; }
     }
     Write("DONE {" # ok # "}");
-  }
-  set commit {
-    var c = dom.GetObject(copyId);
-    var p = dom.GetObject(progId);
-    boolean ok = false;
-    if (c)
-    {
-      if (p)
-      {
-        if ((c.ProgramCopyID() != ID_ERROR) && (c.ID() != p.ID()))
-        {
-          boolean wasActive = p.Active();
-          c.ProgramCopyTo(p.ID());
-          dom.DeleteObject(c.ID());
-          p.ProgramCopyID(ID_ERROR);
-          p.ProgramUpdate();
-          p.Active(wasActive);
-          ok = true;
-        }
-      }
-    }
-    Write("DONE {" # ok # "}");
-  }
-  set abort {
-    var c = dom.GetObject(copyId);
-    if (c)
-    {
-      if (c.IsTypeOf(OT_PROGRAM))
-      {
-        if ((c.ProgramCopyID() != ID_ERROR) && (c.ID() != progId.ToInteger())) { dom.DeleteObject(c.ID()); }
-      }
-    }
-    Write("DONE {true}");
   }
 
   array set a [list progId $id]
   array set b {}
-  catch { array set b [hmscript $begin a] }
+  catch { array set b [hmscript $PROGRAM_COPY_BEGIN a] }
   if { ![info exists b(COPY)] } then { return 0 }
   set copy $b(COPY)
   set fail 0
@@ -1188,12 +1208,130 @@ proc programs_applyConditions { id rule structure plan } {
   if { !$fail } then {
     array set cm [list copyId $copy progId $id]
     array set done {}
-    catch { array set done [hmscript $commit cm] }
+    catch { array set done [hmscript $PROGRAM_COPY_COMMIT cm] }
     if { [info exists done(DONE)] && [string is true -strict $done(DONE)] } then { return 1 }
   }
   array set ab [list copyId $copy progId $id]
-  catch { hmscript $abort ab }
+  catch { hmscript $PROGRAM_COPY_ABORT ab }
   return 0
+}
+
+##
+# Whether each rule of the chain of a program has conditions (the first rule, then every "else if" / "else"). "" = ReGa did not answer.
+##
+proc programs_ruleChain { id } {
+  set script {
+    string chainScan;
+    string i;
+    foreach(i, dom.GetObject(ID_PROGRAMS).EnumIDs())
+    {
+      if (i == progId)
+      {
+        var p = dom.GetObject(i);
+        if (p)
+        {
+          object r = p.Rule();
+          while (r)
+          {
+            WriteLine("RULE HASCOND {" # r.ElseIfFlag() # "}");
+            r = r.RuleSubRule();
+          }
+          WriteLine("END DONE {true}");
+        }
+      }
+    }
+  }
+  array set a [list progId $id]
+  set out ""
+  catch { set out [hmscript $script a] }
+  set chain {}
+  set done 0
+  foreach line [split $out "\n"] {
+    set line [string trim $line]
+    if { "" == $line || [catch { llength $line }] } then { continue }
+    array unset f
+    if { [catch { array set f [lrange $line 1 end] }] } then { continue }
+    switch -- [lindex $line 0] {
+      RULE { lappend chain [string is true -strict $f(HASCOND)] }
+      END { set done 1 }
+    }
+  }
+  if { !$done } then { return "" }
+  return [list $chain]
+}
+
+##
+# Adds the "else" part to a program whose rules end in one with conditions, on a working copy like the other structure changes.
+# Returns 1 when the program now has one more rule.
+##
+proc programs_applyElse { id last } {
+  global PROGRAM_COPY_BEGIN PROGRAM_COPY_COMMIT PROGRAM_COPY_ABORT
+  set op {
+    var c = dom.GetObject(copyId);
+    boolean ok = false;
+    if (c)
+    {
+      integer k = 0;
+      integer total = 0;
+      integer want = ruleIdx.ToInteger();
+      object r = c.Rule();
+      while (r)
+      {
+        if (k == want)
+        {
+          if (opName == "addElse")
+          {
+            object sub = r.RuleSubRule();
+            if (!sub) { sub = r.RuleCreateSubRule(); if (sub) { ok = true; } }
+          }
+        }
+        total = total + 1;
+        r = r.RuleSubRule();
+        k = k + 1;
+      }
+      if (opName == "ruleCount") { Write("RULES {" # total # "} "); ok = true; }
+    }
+    Write("DONE {" # ok # "}");
+  }
+  array set a [list progId $id]
+  array set b {}
+  catch { array set b [hmscript $PROGRAM_COPY_BEGIN a] }
+  if { ![info exists b(COPY)] } then { return 0 }
+  set copy $b(COPY)
+  set fail 0
+  if { "" == [programs_condOp $op $copy $last opName addElse] } then { set fail 1 }
+  if { !$fail } then {
+    set r [programs_condOp $op $copy 0 opName ruleCount]
+    array set rc {}
+    if { "" != $r } then { array set rc $r }
+    if { ![info exists rc(RULES)] || [string trim $rc(RULES)] != $last + 2 } then { set fail 1 }
+  }
+  if { !$fail } then {
+    array set cm [list copyId $copy progId $id]
+    array set done {}
+    catch { array set done [hmscript $PROGRAM_COPY_COMMIT cm] }
+    if { [info exists done(DONE)] && [string is true -strict $done(DONE)] } then { return 1 }
+  }
+  array set ab [list copyId $copy progId $id]
+  catch { hmscript $PROGRAM_COPY_ABORT ab }
+  return 0
+}
+
+proc programs_addElse { uid id } {
+  programs_requireManageable $id
+  set chain [programs_ruleChain $id]
+  if { "" == $chain } then { programs_failed POST "read the rules of program $id" }
+  set chain [lindex $chain 0]
+  set last [expr { [llength $chain] - 1 }]
+  # there is an else part (or nothing to put one under) when the last rule has no conditions
+  if { $last < 0 || ![lindex $chain $last] } then { jsonrpc_error 403 "invalid argument (addElse)" }
+  if { ![programs_applyElse $id $last] } then { programs_failed POST "add the else part to program $id" }
+  api_syslog daemon.notice "cid=[api_cid] method=POST /api/v2/programs uid=$uid action=add the else part to program $id"
+  set d [programs_describe $id]
+  set rules [programs_logic $id]
+  if { "" == $d || "" == $rules } then { programs_failed POST "read program $id after the change" }
+  set base [programs_json $id $d]
+  v2_respondJson "[string range $base 0 end-1],\"rules\":$rules\}"
 }
 
 proc programs_parseBody { allowed } {
@@ -1298,8 +1436,14 @@ proc programs_manage { verb } {
     return
   }
 
-  # POST: create or copy
-  array set body [programs_parseBody {create copy id name description}]
+  # POST: create, copy or add the else part
+  array set body [programs_parseBody {create copy id name description addElse}]
+  if { [info exists body(addElse)] } then {
+    if { "true" ne $body(addElse) || [info exists body(create)] || [info exists body(copy)] || [info exists body(name)] || [info exists body(description)] } then { jsonrpc_error 403 "invalid argument (addElse)" }
+    if { ![info exists body(id)] || ![regexp {^[0-9]{1,10}$} $body(id)] } then { jsonrpc_error 403 "invalid argument (id)" }
+    programs_addElse $uid $body(id)
+    return
+  }
   if { [info exists body(create)] } then {
     if { "true" ne $body(create) || [info exists body(id)] || [info exists body(copy)] } then { jsonrpc_error 403 "invalid argument (create)" }
     if { ![info exists body(name)] } then { jsonrpc_error 403 "invalid argument (name)" }
@@ -1675,7 +1819,7 @@ proc v2_programs_handle { } {
   if { [catch { array set peek [json_parseObject text] } cause] } then {
     jsonrpc_error 100 "invalid request ($cause)"
   }
-  if { [info exists peek(create)] || [info exists peek(copy)] } then { programs_manage POST; return }
+  if { [info exists peek(create)] || [info exists peek(copy)] || [info exists peek(addElse)] } then { programs_manage POST; return }
   array set body [array get peek]
   foreach key [array names body] {
     if { $key ni {id execute active} } then { jsonrpc_error 403 "invalid argument ([regsub -all {[^A-Za-z0-9_.-]} [string range $key 0 39] _])" }

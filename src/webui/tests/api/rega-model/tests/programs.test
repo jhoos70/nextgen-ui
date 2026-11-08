@@ -100,7 +100,7 @@ test programs-7 {only GET, POST, PUT and DELETE are allowed (PATCH is 405 with t
 test programs-8 {the scripts (read, run, switch, describe, change, copy, delete) look the id up in the program collection and the id is a script variable, never code} -body {
   set fd [open [file join $gen rega-model v2 programs.tcl] r]; set c [read $fd]; close $fd
   list [regexp -all {foreach\(i, dom.GetObject\(ID_PROGRAMS\).EnumIDs\(\)\)} $c] [regexp {dom.GetObject\(\$} $c] [regexp -all {ProgramExecute\(\)} $c]
-} -result {11 0 1}
+} -result {12 0 1}
 
 proc modelprograms {extra} {
   set rec [concat {ID 1053 NAME Evening TIME {2026-10-12 21:00:00} ACTIVE true INTERNAL false} $extra]
@@ -557,10 +557,10 @@ test programs-77 {the scripts only ever delete a COPY and never name a variable 
   set missing {}
   foreach v $vars { if {![regexp "\\m$v\\M" $helper]} { lappend missing $v } }
   # every variable the operation script uses has a default
-  regexp {set op \{(.*?)\n  \}\n  set commit} $c -> opScript
+  regexp {proc programs_applyConditions .*?  set op \{(.*?)\n  \}\n} $c -> opScript
   set used {}
   foreach m [regexp -all -inline {\m(opName|grpIdx|sglIdx|opCode|trigger|kindName|targetId|testCode|valueKind|rv1|rv2)\M} $opScript] { dict set used $m 1 }
-  list $missing [expr {[llength [dict keys $used]] <= [llength $vars]}] [regexp {c.ProgramCopyID\(\) != ID_ERROR\) && \(c.ID\(\) != p.ID\(\)\)} $c]
+  list $missing [expr {[llength [dict keys $used]] <= [llength $vars]}] [regexp {set PROGRAM_COPY_COMMIT \{.*?c.ProgramCopyID\(\) != ID_ERROR\) && \(c.ID\(\) != p.ID\(\)\)} $c]
 } -result {{} 1 1}
 
 proc condtargets {mode} {
@@ -577,5 +577,66 @@ test programs-78 {the targets of a condition are what can be read or reports (al
   list [status $a] [regexp {OPERATION_READ \| OPERATION_EVENT} $sa] [regexp {OPERATION_WRITE} $sa] [regexp {ivtString} $sa] [regexp {istAlarm} $sa] \
     [status $b] [regexp {OPERATION_WRITE & dp.Operations} $sb] [regexp {OPERATION_READ} $sb] [regexp {istAlarm} $sb]
 } -result {200 1 0 1 0 200 1 0 1}
+
+# ---- adding the else part (POST {id, addElse})
+set E_CHAIN   {*chainScan*}
+set E_ADD     {*var opName = "addElse";*}
+set E_COUNT   {*var opName = "ruleCount";*}
+proc addelse {body args} {
+  array set o [list -sessions $::ADMIN -chain "RULE HASCOND {true}\r\nEND DONE {true}" -add {DONE {true}} -count {RULES {2} DONE {true}} -commit {DONE {true}} -found $::FOUND]
+  array set o $args
+  set rega [list [list $::E_CHAIN $o(-chain)] [list $::C_BEGIN {COPY {2002} DONE {true}}] [list $::E_ADD $o(-add)] [list $::E_COUNT $o(-count)] \
+    [list $::C_COMMIT $o(-commit)] [list $::C_ABORT {DONE {true}}] [list $::READ $o(-found)] [list $::DESCRIBE $::DESC1] [list $::LOGIC $::LOGICOUT]]
+  return [golden::call_raw $body [golden::prepare [list -candidate $::CAND -method POST -contenttype application/json -setenv {REQUEST_URI /api/v2/programs} \
+    -header {X-Requested-With XMLHttpRequest} -header {X-Session-Id AbCdEf1234} -sessions $o(-sessions) -rega $rega]]]
+}
+proc elsewrites {r} { set n 0; foreach c [dict get $r rega_calls] { if {[string match {*var opName*} $c] || [string match {*wasActive*} $c] || [string match {*Write("COPY*} $c]} { incr n } }; return $n }
+
+test programs-80 {the else part is added on a working copy to the last rule, the copy is checked and put back, the answer is the program} -body {
+  set r [addelse {{"id":"7","addElse":true}}]
+  set s [scripts $r]
+  list [status $r] [regexp {"rules":\[} [body $r]] [regexp {var ruleIdx = "0";} $s] [regexp {var opName = "addElse";} $s] [regexp {var opName = "ruleCount";} $s]
+} -result {200 1 1 1 1}
+
+test programs-81 {the chain ends in the last rule: with an else part (or after an else if) the index is the last one} -body {
+  set r [addelse {{"id":"7","addElse":true}} -chain "RULE HASCOND {true}\r\nRULE HASCOND {true}\r\nEND DONE {true}" -count {RULES {3} DONE {true}}]
+  list [status $r] [regexp {var ruleIdx = "1";} [scripts $r]]
+} -result {200 1}
+
+test programs-82 {a program that has an else part already is HTTP 422 (addElse) and nothing is written} -body {
+  set r [addelse {{"id":"7","addElse":true}} -chain "RULE HASCOND {true}\r\nRULE HASCOND {false}\r\nEND DONE {true}"]
+  list [err $r] [elsewrites $r]
+} -result {{422 403 {invalid argument (addElse)}} 0}
+
+test programs-83 {a bad body is HTTP 422 naming the field and nothing is written} -body {
+  set out {}
+  foreach {json field} {
+    {{"id":"7","addElse":false}} addElse
+    {{"id":"7","addElse":"yes"}} addElse
+    {{"id":"7","addElse":true,"name":"x"}} addElse
+    {{"id":"7","addElse":true,"copy":true,"name":"x"}} addElse
+    {{"addElse":true}} id
+    {{"id":"x","addElse":true}} id
+    {{"id":"7","addElse":true,"rule":0}} rule} {
+    set r [addelse $json]
+    set want [list 422 403 "invalid argument ($field)"]
+    if {[err $r] ne $want || [elsewrites $r] != 0} { lappend out [list $json [err $r] [elsewrites $r]] }
+  }
+  set out
+} -result {}
+
+test programs-84 {only administrators add an else part; an internal program or one that does not exist is refused / not found} -body {
+  set a [addelse {{"id":"7","addElse":true}} -sessions $::USER]
+  set b [addelse {{"id":"7","addElse":true}} -found {FOUND {true} INTERNAL {true} COPY {false} FULL {true}}]
+  set c [addelse {{"id":"7","addElse":true}} -found {}]
+  list [status $a] [err $b] [err $c] [elsewrites $a][elsewrites $b][elsewrites $c]
+} -result {403 {403 400 {access denied (program)}} {404 501 {program not found}} 000}
+
+test programs-85 {a failure (the operation, the count of rules, the commit) deletes the working copy: HTTP 502, never put back} -body {
+  set a [addelse {{"id":"7","addElse":true}} -add {}]
+  set b [addelse {{"id":"7","addElse":true}} -count {RULES {1} DONE {true}}]
+  set c [addelse {{"id":"7","addElse":true}} -commit {DONE {false}}]
+  list [err $a] [condabort $a] [err $b] [condabort $b] [err $c] [condabort $c]
+} -result [list {502 501 {the CCU did not take the change}} 1 {502 501 {the CCU did not take the change}} 1 {502 501 {the CCU did not take the change}} 1]
 
 cleanupTests

@@ -640,6 +640,19 @@ export function makeSaveProgramConditions(doFetch: Fetch = defaultFetch): (sid: 
 const saveProgramConditionsDefault = makeSaveProgramConditions();
 export const saveProgramConditions = (sid: string, id: string, rule: number, conditions: ConditionsInput): Promise<ProgramLogic> => saveProgramConditionsDefault(sid, id, rule, conditions);
 
+/** POST /programs {id, addElse}: adds the "else" part (no conditions, no actions yet) to a program whose last rule has conditions. The answer is the program as it is now. */
+export function makeAddProgramElse(doFetch: Fetch = defaultFetch): (sid: string, id: string) => Promise<ProgramLogic> {
+  return async function addProgramElse(sid: string, id: string): Promise<ProgramLogic> {
+    const { doc, status } = await send(doFetch, "/programs", { method: "POST", headers: headersFor(sid, true), body: JSON.stringify({ id, addElse: true }) });
+    throwIfError(doc, status);
+    const d = doc as Partial<ProgramLogic> | null;
+    if (!d || typeof d.id !== "string" || !Array.isArray(d.rules)) throw new ApiError(0, "unexpected answer", status);
+    return { ...toManagedProgram(d, status), rules: d.rules };
+  };
+}
+const addProgramElseDefault = makeAddProgramElse();
+export const addProgramElse = (sid: string, id: string): Promise<ProgramLogic> => addProgramElseDefault(sid, id);
+
 export interface ProgramRun {
   id: string;
   executed: boolean;

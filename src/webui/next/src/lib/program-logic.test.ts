@@ -127,3 +127,21 @@ describe("scaling values", () => {
     expect(describeAction(act({ valueType: 6, value: "0.005000", datapointUnit: "100%" }), t)).toContain("to 0.5 %");
   });
 });
+
+describe("the else part", () => {
+  it("can be added when the rules end in one with conditions", async () => {
+    const { canAddElse } = await import("./program-logic");
+    expect([canAddElse([]), canAddElse([{ hasCondition: true }]), canAddElse([{ hasCondition: true }, { hasCondition: false }]), canAddElse([{ hasCondition: true }, { hasCondition: true }])]).toEqual([false, true, false, true]);
+  });
+  it("POSTs {id, addElse} and returns the program", async () => {
+    const { makeAddProgramElse } = await import("./api");
+    let url = "", init: RequestInit | undefined;
+    const body = { id: "7", name: "P", description: "", isActive: false, isVisible: true, isOperable: true, rules: [{ hasCondition: true, groups: [], stopDelays: true, actions: [] }, { hasCondition: false, groups: [], stopDelays: true, actions: [] }] };
+    const out = await makeAddProgramElse(async (u, i) => ((url = String(u)), (init = i), new Response(JSON.stringify(body))))("x", "7");
+    expect([url, init!.method, JSON.parse(String(init!.body)), out.rules.length]).toEqual(["/api/homematic.cgi/v2/programs", "POST", { id: "7", addElse: true }, 2]);
+  });
+  it("refuses an answer without rules", async () => {
+    const { makeAddProgramElse } = await import("./api");
+    await expect(makeAddProgramElse(async () => new Response('{"id":"7","name":"P","isVisible":true,"isOperable":true}'))("x", "7")).rejects.toBeInstanceOf(Error);
+  });
+});

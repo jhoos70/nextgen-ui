@@ -2,10 +2,11 @@ import * as React from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Button } from "@/components/ui/button";
 import { ProgramActionsDialog } from "@/components/ProgramActionsDialog";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ProgramConditionsDialog } from "@/components/ProgramConditionsDialog";
-import { describeChangeError, getProgramLogic, isSessionExpired, type LogicRule, type Program } from "@/lib/api";
+import { addProgramElse, describeChangeError, getProgramLogic, isSessionExpired, type LogicRule, type Program } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import { describeAction, describeCondition, describeDelay, VT_STRING } from "@/lib/program-logic";
+import { canAddElse, describeAction, describeCondition, describeDelay, VT_STRING } from "@/lib/program-logic";
 
 /** What a program does, read from the CCU and shown in words: its conditions and its actions, per rule. Read only. */
 export function ProgramLogicDialog({ program, sid, onClose, onExpired, onChanged }: { program: Program; sid: string; onClose: () => void; onExpired: () => void; onChanged: () => void }) {
@@ -15,7 +16,9 @@ export function ProgramLogicDialog({ program, sid, onClose, onExpired, onChanged
   const [editing, setEditing] = React.useState<number | null>(null);
   const [editingConds, setEditingConds] = React.useState<number | null>(null);
   const [saved, setSaved] = React.useState(false);
-  const [savedKind, setSavedKind] = React.useState<"actions" | "conditions">("actions");
+  const [savedKind, setSavedKind] = React.useState<"actions" | "conditions" | "else">("actions");
+  const [askElse, setAskElse] = React.useState(false);
+  const [addingElse, setAddingElse] = React.useState(false);
   const editOpener = React.useRef<HTMLElement | null>(null);
 
   React.useEffect(() => {
@@ -34,6 +37,28 @@ export function ProgramLogicDialog({ program, sid, onClose, onExpired, onChanged
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sid, program.id]);
 
+  async function addElse(): Promise<string | null> {
+    setAddingElse(true);
+    try {
+      const logic = await addProgramElse(sid, program.id);
+      setRules(logic.rules);
+      setSaved(true);
+      setSavedKind("else");
+      onChanged();
+      return null;
+    } catch (e) {
+      if (isSessionExpired(e)) {
+        onExpired();
+        return null;
+      }
+      const reason = describeChangeError(e, t);
+      setError(reason);
+      return reason;
+    } finally {
+      setAddingElse(false);
+    }
+  }
+
   const heading = (rule: LogicRule, index: number) => (!rule.hasCondition ? t("logicElse") : index === 0 ? t("logicIf") : t("logicElseIf"));
 
   return (
@@ -49,7 +74,7 @@ export function ProgramLogicDialog({ program, sid, onClose, onExpired, onChanged
             <p className="text-xs text-[var(--muted-foreground)]">{t("logicReadOnly")}</p>
             {saved && (
               <p role="status" className="text-sm">
-                {t(savedKind === "conditions" ? "condSaved" : "actionSaved", { name: program.name })}
+                {t(savedKind === "conditions" ? "condSaved" : savedKind === "else" ? "logicElseAdded" : "actionSaved", { name: program.name })}
               </p>
             )}
             {error && (
@@ -132,6 +157,13 @@ export function ProgramLogicDialog({ program, sid, onClose, onExpired, onChanged
                 </div>
               </section>
             ))}
+            {rules && canAddElse(rules) && (
+              <div>
+                <Button type="button" variant="outline" disabled={addingElse} onClick={() => (program.isActive ? setAskElse(true) : void addElse())}>
+                  {t("logicAddElse")}
+                </Button>
+              </div>
+            )}
             <div className="flex justify-end">
               <Button type="button" variant="outline" onClick={onClose} autoFocus>
                 {t("ok")}
@@ -140,6 +172,9 @@ export function ProgramLogicDialog({ program, sid, onClose, onExpired, onChanged
           </div>
         </Dialog.Content>
       </Dialog.Portal>
+      {askElse && (
+        <ConfirmDialog raised tone="default" title={t("logicAddElseTitle")} message={t("logicAddElseWarning")} confirmLabel={t("logicAddElse")} onConfirm={addElse} onClose={() => setAskElse(false)} />
+      )}
       {rules && editingConds !== null && rules[editingConds] && (
         <ProgramConditionsDialog
           programId={program.id}

@@ -243,7 +243,11 @@ program and puts the copy back over the original in one step, as the classic edi
 The program list of targets comes from `GET /api/v2/programs?targets=1` (about 300 kB on a CCU with 160 devices, read when an editor
 opens). **An active program is put back as it was: the CCU checks its conditions again and the program can run at once**, so the
 editor says so first. An action the editor cannot show (a target that does not exist any more) makes the part read only here.
-Not built yet: creating the *Else* part of a program, the weekly programs.
+**The else part.** A program whose last rule has conditions shows **Add an else part** in the Logic dialog (`POST /api/v2/programs
+{id, addElse: true}`). It is written on a working copy like the other structure changes and starts empty: fill it with *Edit actions:
+Else*. A program that has one already is refused (HTTP 422, `addElse`). For an active program the editor asks first: putting the program
+back makes the CCU check its conditions again, and it can run at once. The else part has no conditions of its own. Not built yet: an
+*else if* (a further rule with conditions), removing the else part, weekly programs.
 
 **Editing the conditions (administrators).** *Edit conditions* next to *If* / *Else if* opens the groups of the rule. The classic editor
 keeps ONE joiner between the groups and one inside each group, and so does this one (*and* / *or*). A condition is a device
