@@ -3,7 +3,7 @@
 **Test systems only.** The code has been tested against mocks (1,247 tests), never on a real
 ReGaHss, `rfd`, `hs485d` or lighttpd. Do not install this on a CCU you rely on.
 
-What you get: `out/webui-api-bundle.tar.gz` (the 99 files that differ from upstream `5b8179c4`) and
+What you get: `out/webui-api-bundle.tar.gz` (the 106 files that differ from upstream; the upstream revision is pinned in `src/webui/tests/api/LEGACY_REV`, currently `87e39a10`) and
 `smoke.py` (a read-only test you run from your computer). Rebuild the bundle after changes with
 `.migration/webui-api/deploy/make-bundle.sh` **from the repository root**.
 
@@ -34,6 +34,14 @@ recognised as its own and replaced. A device installed by an older installer (be
 first run of the new installer for every file that already equals the bundle; files that were patched then stay "skipped" as
 before. `sh .migration/webui-api/deploy/install-test.sh` tests the rules on a fake device (a miniature bundle in two
 versions: install, upgrade, a patched file, a hand-edited file, restore); it needs no CCU.
+
+**Merging upstream.** `LEGACY_REV` is the upstream revision the bundle and the tests measure "ours" against; advance it to the upstream
+commit that was merged (`git merge upstream/main`, then `git rev-parse upstream/main > src/webui/tests/api/LEGACY_REV`) and build the
+bundle AFTER the merge commit (it reads git history). `PATCH_BASE_REV` stays at the base the sibling OpenCCU patches were written for until
+the sibling bumps its pin. A device that runs an OLDER firmware than `LEGACY_REV` has other bytes than the bundle's base for the files that
+upstream changed (for example `methods.conf`, the `*hmipserver.tcl` methods, `getpositiondata.tcl`): the installer then skips them or
+tries `--patch`; update the device image first, or expect those files to be reported as skipped. The nextGen UI and the v2 routes do not
+depend on them.
 
 ## Steps
 
