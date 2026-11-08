@@ -20,6 +20,7 @@ C = {
     "closed": ("#f1f5f9", "#475569"),  # closed source / native
     "warn": ("#fee2e2", "#dc2626"),
     "plain": ("#ffffff", "#9aa5b5"),
+    "note": ("#fef9c3", "#ca8a04"),   # opinion
 }
 
 
@@ -256,7 +257,7 @@ def d3():
 
 
 def d4():
-    s = Svg("4  Options compared", "Four ways to carry the nextGen UI. Cells are facts from the repo or measurements where possible; the last row is an opinion for discussion.")
+    s = Svg("4  Options compared", "Four ways to carry the nextGen UI. Cells are facts from the repo or measurements where possible; the last row is an opinion. Slide 7 has the numbers behind the coupling row.")
     cols = [
         ("A  Current", "refactor in place", "ui"),
         ("B  A + push relay", "optional add-on", "go"),
@@ -272,8 +273,9 @@ def d4():
         ("Tests", ["1,390 Tcl contract tests (10 components), 19 browser suites", "plus relay tests (to write)", "whole new suite (to write)", "upstream's"]),
         ("Licence", ["Apache-2.0 (+ HMSL for eQ-3 parts)", "Apache-2.0", "your choice", "AGPL-3.0: derived work is AGPL"]),
         ("Effort / rollback", ["done, ongoing; restore a backup", "small to medium; remove the add-on", "large rewrite risk; hard to undo", "low to adopt; dependency, little control"]),
+        ("Coupling to upstream", ["103 files in upstream's tree: last merge had 5 collisions, about 30 test edits", "as A; the relay itself sits outside the tree", "no merge cost; silent drift from the classic behaviour it re-implements", "own repo; imports upstream texts and profiles by 3 scripts"]),
     ]
-    x0, y0, cw, lw, rh = 40, 108, 330, 220, 72
+    x0, y0, cw, lw, rh = 40, 108, 330, 220, 64
     # header
     for i, (t, sub, role) in enumerate(cols):
         x = x0 + lw + i * cw
@@ -366,6 +368,45 @@ def d6():
     s.write(os.path.join(here, "06-polling-vs-push.svg"))
 
 
-for f in (d1, d2, d3, d4, d5, d6):
+def d7():
+    s = Svg("7  Coupling to upstream: what the merge of 2026-11-08 cost", "Merging 103 upstream commits (3 weeks) into nextgen-ui. The React app was not the problem; the server-side changes inside upstream's tree and the tests that pin them were.")
+    top = 118
+    h1 = s.box(40, top, 480, None, "plain", "Measured on this merge", [
+        "- nextGen app: 114 files in its own folder: 0 conflicts, 1 line changed (a nav entry for a new classic menu item)",
+        "- our API code inside upstream's www/api tree: 103 files; 5 of them were also changed by upstream",
+        "- text conflicts: 3 hmipserver methods + README; 2 more files merged on their own but changed behaviour",
+        "- follow-up edits: about 30 files, nearly all tests, the method schema and notes (counts, new fields, removed method)",
+        "- the sibling OpenCCU patches: 11 of 13 no longer apply to the merged tree; 7 of them are now part of Base",
+        "- found afterwards: the CCU3 answered 'method not found' for 4 methods of its own classic UI, because we shipped methods.conf as a whole file",
+    ])
+    cx = 560
+    s.add(f'<text x="{cx}" y="{top + 18}" font-size="17" font-weight="700" fill="{INK}">Three kinds of coupling in option A</text>')
+    y = top + 34
+    for role, name, body in (
+        ("tcl", "Textual", ["we edit files that upstream also edits (methods.conf, the hmipserver methods, getpositiondata)"]),
+        ("warn", "Contract", ["our tests pin upstream's behaviour: method counts, output fields, which channels are returned"]),
+        ("closed", "Deployment", ["the bundle overwrites files in /www of a device whose firmware has its own versions"]),
+    ):
+        y += s.box(cx, y, 470, None, role, name, body, size=14, tsize=16) + 10
+    s.add(f'<text x="1060" y="{top + 18}" font-size="17" font-weight="700" fill="{INK}">MUI, for comparison (inspected, source not read)</text>')
+    y2 = top + 34
+    y2 += s.box(1060, y2, 500, None, "go", "No merge, other ways to lag", [
+        "- separate add-on in its own repo: nothing of it inside upstream's tree",
+        "- imports upstream data by 3 build scripts (link profiles, parameter labels, service-message texts)",
+        "- re-implements classic behaviour in Go ('as cp_time.cgi does'): when upstream changes it, nothing fails, MUI just differs",
+        "- reads firmware internals (files, CGIs) at runtime: a firmware change breaks it there, not at merge time",
+    ], size=14, tsize=16) + 10
+    ybot = max(top + h1, y, y2) + 24
+    s.box(40, ybot, 1520, None, "note", "Reading (opinion, nothing decided)", [
+        "- the friction belongs to 'refactor in place' of v1 (the modernizer's choice), not to React or to the nextGen UI: a Go backend would swap loud merge cost for silent drift",
+        "- it is reducible: apply our methods.conf entries one by one instead of replacing the file, offer the hardening upstream, derive test counts from the registry, merge upstream weekly (smaller steps, earlier signal)",
+        "- as a criterion for the decision: where does each option put its code relative to upstream, and what does one upstream week cost?",
+    ], size=14.5)
+    s.legend([("plain", "measured here", False), ("tcl", "textual", False), ("warn", "contract", False), ("closed", "deployment", False), ("go", "MUI", False), ("note", "opinion", False)])
+    s.footer("Sources: git history of the merge 021069d8 (diff against both parents), PATCH-CONFLICTS.md, the install check on the test CCU of 2026-11-08, MUI's THIRD_PARTY_LICENSES.md and the text inside its binary.")
+    s.write(os.path.join(here, "07-coupling-to-upstream.svg"))
+
+
+for f in (d1, d2, d3, d4, d5, d6, d7):
     f()
 print("written:", ", ".join(sorted(x for x in os.listdir(here) if x.endswith(".svg"))))
