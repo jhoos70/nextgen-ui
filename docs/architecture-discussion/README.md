@@ -1,6 +1,6 @@
 # Architecture discussion: nextGen UI vs a MUI-style Go backend
 
-Seven diagrams (standalone SVG, 16:9) and the evidence behind them. Regenerate with `python3 make-diagrams.py`.
+Nine slides (standalone SVG, 16:9) and the evidence behind them. Regenerate with `python3 make-diagrams.py`.
 
 | File | Shows |
 |---|---|
@@ -10,6 +10,7 @@ Seven diagrams (standalone SVG, 16:9) and the evidence behind them. Regenerate w
 | `04-options-compared.svg` | A current, B A + relay, C full Go backend, D adopt or fork MUI, over eight criteria |
 | `05-modernizer-drivers-rechecked.svg` | The six drivers of the October decision, re-checked against today's evidence |
 | `06-polling-vs-push.svg` | What polling and push cost the CCU for the same screen |
+| `08-decisions-and-outcomes-1.svg`, `09-decisions-and-outcomes-2.svg` | The decisions of the migration phase (foundations, then engineering choices of the build) with their outcome and a verdict; also as text in `decisions-and-outcomes.md` |
 | `07-coupling-to-upstream.svg` | What merging upstream cost, the three kinds of coupling, and how MUI relates to upstream differently |
 
 ## What the modernizer decided (`.migration/webui-api/architect/`)
@@ -38,7 +39,7 @@ Not measured: other boards (older CCU3 hardware, small VMs), load with several t
 
 ## Coupling to upstream (slide 7, and a row on slide 4)
 
-The merge of 103 upstream commits on 2026-11-08 gave no conflict in the 114 files of the nextGen app. The cost came from the 103 API files this
+The merge of 103 upstream commits on 2026-11-08 gave no conflict in the 114 files of the nextGen app. The cost came from the 106 server-side files this
 branch keeps inside upstream's `www/api` tree (5 changed on both sides) and from the tests that pin upstream's behaviour (about 30 edits).
 MUI does not have merge conflicts (separate add-on, build-time data import), but re-implements classic behaviour, so it drifts silently.
 Reducing it for option A: apply our `methods.conf` entries one by one, offer the hardening upstream, derive test counts from the registry,

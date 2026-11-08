@@ -273,7 +273,7 @@ def d4():
         ("Tests", ["1,390 Tcl contract tests (10 components), 19 browser suites", "plus relay tests (to write)", "whole new suite (to write)", "upstream's"]),
         ("Licence", ["Apache-2.0 (+ HMSL for eQ-3 parts)", "Apache-2.0", "your choice", "AGPL-3.0: derived work is AGPL"]),
         ("Effort / rollback", ["done, ongoing; restore a backup", "small to medium; remove the add-on", "large rewrite risk; hard to undo", "low to adopt; dependency, little control"]),
-        ("Coupling to upstream", ["103 files in upstream's tree: last merge had 5 collisions, about 30 test edits", "as A; the relay itself sits outside the tree", "no merge cost; silent drift from the classic behaviour it re-implements", "own repo; imports upstream texts and profiles by 3 scripts"]),
+        ("Coupling to upstream", ["106 files differ from upstream: last merge had 5 collisions, about 30 test edits", "as A; the relay itself sits outside the tree", "no merge cost; silent drift from the classic behaviour it re-implements", "own repo; imports upstream texts and profiles by 3 scripts"]),
     ]
     x0, y0, cw, lw, rh = 40, 108, 330, 220, 64
     # header
@@ -373,7 +373,7 @@ def d7():
     top = 118
     h1 = s.box(40, top, 480, None, "plain", "Measured on this merge", [
         "- nextGen app: 114 files in its own folder: 0 conflicts, 1 line changed (a nav entry for a new classic menu item)",
-        "- our API code inside upstream's www/api tree: 103 files; 5 of them were also changed by upstream",
+        "- our server-side code inside upstream's tree: 106 files (80 changed, 26 added; 58 are v1 method scripts); 5 of them were also changed by upstream",
         "- text conflicts: 3 hmipserver methods + README; 2 more files merged on their own but changed behaviour",
         "- follow-up edits: about 30 files, nearly all tests, the method schema and notes (counts, new fields, removed method)",
         "- the sibling OpenCCU patches: 11 of 13 no longer apply to the merged tree; 7 of them are now part of Base",
@@ -407,6 +407,88 @@ def d7():
     s.write(os.path.join(here, "07-coupling-to-upstream.svg"))
 
 
-for f in (d1, d2, d3, d4, d5, d6, d7):
+DECISIONS = []   # (title, subtitle, rows, extra) of every decision slide, for decisions-and-outcomes.md
+
+
+def decision_slide(title, subtitle, rows, filename, footer, extra=None):
+    """A table of decisions: what was decided (and when), why, the outcome with its evidence, and a verdict."""
+    DECISIONS.append((title, subtitle, rows, extra, footer))
+    s = Svg(title, subtitle)
+    cols = [("Decision", 300), ("Why", 300), ("Outcome (what we know)", 640), ("Verdict", 210)]
+    xs = [40]
+    for _, w in cols[:-1]:
+        xs.append(xs[-1] + w + 8)
+    y = 104
+    for (name, w), x in zip(cols, xs):
+        s.add(f'<rect x="{x}" y="{y}" width="{w}" height="36" rx="8" fill="#0f172a"/>')
+        s.text(x + 12, y + 24, name, 14.5, 700, "#ffffff")
+    y += 44
+    verdict_fill = {"held": "#dcfce7", "partly": "#fef3c7", "revisit": "#fee2e2", "open": "#e0e7ff"}
+    size = 13.5
+    for dec, why, outcome, kind, verdict in rows:
+        cells = [textwrap.wrap(dec, 37), textwrap.wrap(why, 37), textwrap.wrap(outcome, 86), textwrap.wrap(verdict, 24)]
+        lines = max(len(c) for c in cells)
+        rh = int(lines * size * 1.3 + 22)
+        for i, (name, w) in enumerate(cols):
+            fill = verdict_fill[kind] if i == 3 else ("#f8fafc" if i == 0 else "#ffffff")
+            s.add(f'<rect x="{xs[i]}" y="{y}" width="{w}" height="{rh}" rx="8" fill="{fill}" stroke="{LINE}" stroke-width="1.5"/>')
+            s.lines(xs[i] + 12, y + 24, cells[i], size, weight=(700 if i in (0, 3) else 400), gap=1.3)
+        y += rh + 6
+    if extra:
+        y += 4
+        s.box(40, y, 1520, None, "note", extra[0], extra[1], size=13.5, tsize=15.5)
+    s.footer(footer)
+    s.write(os.path.join(here, filename))
+
+
+def d8():
+    rows = [
+        ("Refactor in place (modernizer, Oct 2026)", "v1 contract frozen, ReGa and the interface daemons closed source, small device, classic UI stays", "v1 hardened inside upstream's tree (58 method scripts, 18 libraries; 106 files differ from upstream in all); v2 added beside it; 1,390 Tcl contract tests. The cost showed at the merge (slide 7). The measurement gate for a gateway was never run until now: the gap is push.", "held", "Held; narrow the in-place edits"),
+        ("D2  Classic and nextGen side by side (31 Oct)", "classic must keep working; OpenCCU's patches depend on webui.js", "nextGen lives in /webui/next/. Against current upstream only 2 files of the classic area differ (utf82ansi.py, hm_deldev). The app merged with 0 conflicts and the CCU3 serves both UIs.", "held", "Held"),
+        ("D1  Charset: staged UTF-8 (31 Oct)", "stop silent loss of characters without changing the served bytes", "Stage 1 done: the build fails instead of dropping characters; served output unchanged. Stage 2 (serve UTF-8, regenerate the patches) not started; many of those patches have since been absorbed upstream.", "partly", "Stage 1 held; stage 2 open"),
+        ("D3 / D4  Open source only; React, TypeScript, Vite, shadcn (31 Oct)", "licence fit with Apache-2.0; a spike ran clean", "13.7k lines of TypeScript, 14 pages, one 718 kB bundle (203 kB gzipped; the spike measured 91 kB for React alone), 219 unit tests, 19 browser suites. A full licence scan of all dependencies was started and not finished.", "held", "Held; finish the licence scan"),
+        ("D5  Routing: /webui/next/ and /api/homematic.cgi/v2 (31 Oct)", "no change to OpenCCU's packaging repo or its lighttpd config", "Works on the CCU3. Costs: long URLs, one process start per request (about 80 ms), and a push channel would need a proxy rule. Clean URLs (route A) not done.", "held", "Held; route A open"),
+        ("D6  Object-centric navigation, no global Save (31 Oct)", "the classic menu shows six nouns twice; dialogs save themselves", "A drift test against the classic menu files caught upstream's new script-executor entry at the merge. Not built yet: diagrams, direct links, device inbox, scripts.", "held", "Held"),
+        ("D7  The new UI writes, by v2 mutation routes (31 Oct)", "nextGen is meant to replace classic later", "Built and tested on a restored real ReGa: variables, programs (run, activate, create, copy, delete, edit actions and conditions, else part), favourites, messages, log, device values. Fixed server scripts, validation, one syslog line each.", "held", "Held; the largest delivery"),
+        ("Process: no push or PR before tested end to end", "origin was a public fork", "Nothing went to OpenCCU. nextgen-ui lives in your fork, 78 commits since the old base, 3 betas on 2026-11-01. Whether to offer the API hardening upstream is open.", "held", "Held for OpenCCU; upstreaming open"),
+    ]
+    decision_slide("8  Decisions of the migration phase and their outcome (1 of 2)", "The foundations, decided 2026-10-31 and in the modernizer's October plan. Status as of 2026-11-08.", rows, "08-decisions-and-outcomes-1.svg",
+        "Sources: .migration/plan/decisions-ui.md, .migration/webui-api/architect/target-architecture.adr.md, the git history of nextgen-ui (78 commits since 5b8179c4), the test suites and the installs of 2026-11-08.")
+
+
+def d9():
+    rows = [
+        ("Verify on a real ReGa (restored copy) before the CCU3", "mocks hide how ReGa behaves", "Six traps that mocks missed: && does not short-circuit, '!' binds loosely, an undefined variable silently kills a script, numbers assigned to strings, '!= null' is unreliable, a deleted time condition empties its timer. The editors ran on the restored copy only; none has run on the CCU3 yet.", "held", "Held"),
+        ("Fixed server scripts, values bound as variables", "no ReGa code built from user input", "Every route runs fixed text and the tests assert it. Price: each feature needs its own Tcl route and tests, and the scripts cannot be shared with other tools.", "held", "Held"),
+        ("Structure changes on a working copy, put back in one step", "the classic editor's own pattern; a failure must not damage a program", "Used for actions, conditions and the else part. Every refusal and failure test left the program unchanged, with no stray copy. An active program is re-activated and can run at once: the editor warns first.", "held", "Held"),
+        ("Program editor in stages: manage, read, actions, conditions, else", "the classic editor is about 2,500 lines over raw integer codes", "All five stages built in about a week. Reading 54 real programs showed 74 of 79 actions are scripts, so scripts became a first-class action. Time controls can be kept or removed, not created; else-if and weekly programs are open.", "partly", "Held; three parts open"),
+        ("Deploy by installer with backups, not as an add-on", "files live in /www (needs a remount); per-file rules for patched files", "17 backups on the CCU3; restore works. One regression: methods.conf shipped as a whole file left 4 methods 'not found' on the CCU3 until the upstream merge. Add-on packaging exists (3 betas) but is not what runs.", "revisit", "Revisit: entry-level patch"),
+        ("Tests pin behaviour; two pins for 'ours'", "make regressions visible, measure the delta against upstream", "1,390 Tcl tests, 19 browser suites and 219 unit tests made the upstream changes visible at the merge. Price: about 30 follow-up edits and a pin to advance on every merge (slide 7).", "partly", "Held; derive counts from the registry"),
+    ]
+    decision_slide("9  Decisions made while building, and their outcome (2 of 2)", "Engineering choices of the build phase (2026-11-01 to 11-08). Status as of 2026-11-08.", rows, "09-decisions-and-outcomes-2.svg",
+        "Sources: .migration/plan/decisions-ui.md (items 1 to 18), the test runs of 2026-11-08, the install checks and backups on the test CCU. Verdicts are an opinion.",
+        extra=("Still open after the migration phase", [
+            "- a live push channel (slides 3 and 6)   - UTF-8 stage 2 and clean URLs (route A)   - time controls, else-if and weekly programs   - upstreaming the v1 hardening",
+            "- the methods.conf deployment (entry by entry)   - a weekly upstream merge   - a full dependency licence scan   - a real radio interface for the duty-cycle and device paths (the test CCUs have none)",
+        ]))
+
+
+def write_decisions_markdown():
+    """The decision slides as Markdown tables (to paste into a forum post or a document)."""
+    out = ["# Decisions of the migration phase and their outcome", "",
+           "Generated by `make-diagrams.py` from the same rows as slides 8 and 9. Status as of 2026-11-08; verdicts are an opinion.", ""]
+    for title, subtitle, rows, extra, footer in DECISIONS:
+        out += ["## " + title, "", subtitle, "", "| Decision | Why | Outcome (what we know) | Verdict |", "|---|---|---|---|"]
+        for dec, why, outcome, kind, verdict in rows:
+            out.append("| " + " | ".join(c.replace("|", "/") for c in (dec, why, outcome, verdict)) + " |")
+        out += ["", "_" + footer + "_", ""]
+        if extra:
+            items = [i.strip() for b in extra[1] for i in b.lstrip("- ").split("   - ")]
+            out += ["**" + extra[0] + "**", ""] + ["- " + i for i in items] + [""]
+    open(os.path.join(here, "decisions-and-outcomes.md"), "w", encoding="utf-8").write("\n".join(out))
+
+
+for f in (d1, d2, d3, d4, d5, d6, d7, d8, d9):
     f()
+write_decisions_markdown()
 print("written:", ", ".join(sorted(x for x in os.listdir(here) if x.endswith(".svg"))))
